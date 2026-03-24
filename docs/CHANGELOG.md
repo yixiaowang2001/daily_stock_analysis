@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### 修复
 
+- **组合 IBKR Flex 拉仓** — `POST /api/v1/portfolio/ibkr-flex/refresh` 优先从当前 `.env`（与系统设置同一来源）解析 `IBKR_FLEX_TOKEN` / `IBKR_FLEX_QUERY_ID`，再回退到 `Config` 单例，避免仅保存到 `.env` 而进程内配置未同步时误报未配置；组合页在「全部账户」视图下提示需先选择具体账户。
+- **组合 IBKR Flex 网络错误** — 连接 `interactivebrokers.com` 超时或不可达时返回 **503**（`ibkr_flex_network_error`）及中文说明，不再落为 500；支持可选环境变量 `IBKR_FLEX_CONNECT_TIMEOUT`、`IBKR_FLEX_READ_TIMEOUT`。
+- **组合 IBKR Flex CSV** — 持仓解析新增对 Flex Query 常见 **ClientAccountID 表头** 段的支持（含 `Quantity` / `MarkPrice` / `PositionValue`、`LevelOfDetail=SUMMARY` 过滤）；仍兼容原有 **Open Positions** 标题段。
 - 🧾 **完整 Markdown 报告表格间距收敛** — 调整完整分析报告抽屉中 Markdown 表格 `th/td` 的内边距到更紧凑的 4-6px 区间，减轻窄列场景下的拥挤和失衡感，让表格信息密度与报告正文更协调。
 - 🖥️ **Dashboard 字号层级回调** — 收敛首页侧栏与空状态的字体层级：恢复首页空状态主标题的强调级别，统一“历史分析 / 分析任务”侧栏面板标题尺寸，并微调历史列表中“已选 / 删除 / 全选当前”这组操作元素的密度与对齐。
 - 🧾 **Web 报告透明度区复制按钮层级修复**（#749）— `ReportDetails` 中”原始分析结果 / 分析快照”的复制按钮补齐可点击层级，避免被下方 JSON 内容覆盖后出现按钮可见但无法点击的问题。

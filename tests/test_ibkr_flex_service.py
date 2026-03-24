@@ -6,6 +6,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
+import requests
+
 from src.services.ibkr_flex_service import (
     IbkrFlexError,
     fetch_ibkr_flex_open_positions,
@@ -42,6 +44,35 @@ class IbkrFlexServiceTests(unittest.TestCase):
         self.assertEqual(rows[0]["symbol"], "HK00700")
         self.assertEqual(rows[0]["market"], "hk")
 
+    def test_parse_client_account_id_flex_section(self) -> None:
+        """Flex Query CSV with ClientAccountID header row (not Open Positions title)."""
+        csv_text = (
+            "ClientAccountID,LevelOfDetail,AssetClass,CurrencyPrimary,Symbol,Quantity,Mult,"
+            "MarkPrice,PositionValue,CostBasisMoney,FifoPnlUnrealized\n"
+            "U1234567,SUMMARY,STK,USD,MSFT,5,1,400,2000,1800,200\n"
+        )
+        rows = parse_open_positions_from_csv(csv_text)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["symbol"], "MSFT")
+        self.assertEqual(rows[0]["market"], "us")
+        self.assertAlmostEqual(rows[0]["quantity"], 5.0)
+        self.assertAlmostEqual(rows[0]["total_cost"], 1800.0)
+        self.assertAlmostEqual(rows[0]["avg_cost"], 360.0)
+        self.assertAlmostEqual(rows[0]["last_price"], 400.0)
+        self.assertAlmostEqual(rows[0]["market_value_local"], 2000.0)
+        self.assertAlmostEqual(rows[0]["unrealized_pnl_local"], 200.0)
+
+    def test_parse_client_account_id_skips_lot_rows(self) -> None:
+        csv_text = (
+            "ClientAccountID,LevelOfDetail,Symbol,Quantity,Mult,MarkPrice,PositionValue,CostBasisMoney,"
+            "FifoPnlUnrealized,AssetClass,CurrencyPrimary\n"
+            "hdr,LOT,AAPL,10,1,100,1000,900,100,STK,USD\n"
+            "hdr,SUMMARY,AAPL,10,1,100,1000,900,100,STK,USD\n"
+        )
+        rows = parse_open_positions_from_csv(csv_text)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["quantity"], 10.0)
+
     @patch("src.services.ibkr_flex_service.requests.get")
     def test_send_flex_request_reference_code(self, mock_get: MagicMock) -> None:
         mock_resp = MagicMock()
@@ -52,6 +83,15 @@ class IbkrFlexServiceTests(unittest.TestCase):
         self.assertEqual(ref, "REF123")
         args, kwargs = mock_get.call_args
         self.assertIn("FlexStatementService.SendRequest", args[0])
+
+    @patch("src.services.ibkr_flex_service.requests.get")
+    def test_send_flex_request_connect_timeout_returns_503_error(self, mock_get: MagicMock) -> None:
+        mock_get.side_effect = requests.ConnectTimeout("timed out")
+        with self.assertRaises(IbkrFlexError) as ctx:
+            send_flex_request(token="tok", query_id="99")
+        self.assertEqual(ctx.exception.suggested_status, 503)
+        self.assertEqual(ctx.exception.error_detail, "ibkr_flex_network_error")
+        self.assertIn("SendRequest", str(ctx.exception))
 
     @patch("src.services.ibkr_flex_service.get_flex_statement")
     @patch("src.services.ibkr_flex_service.send_flex_request")

@@ -23,14 +23,31 @@ logger = logging.getLogger(__name__)
 
 FLEX_SERVLET_BASE = "https://www.interactivebrokers.com/Universal/servlet"
 FLEX_VERSION = "3"
-DEFAULT_TIMEOUT = (10, 120)
+_DEFAULT_CONNECT_TIMEOUT = 10.0
+_DEFAULT_READ_TIMEOUT = 120.0
 PROGRESS_PHRASE = "statement generation in progress"
 MAX_GET_ATTEMPTS = 30
 GET_POLL_INTERVAL_SEC = 2.0
 
 
 class IbkrFlexError(Exception):
-    """Flex Web Service returned an error or unexpected payload."""
+    """Flex Web Service returned an error or unexpected payload.
+
+    Attributes:
+        suggested_status: HTTP status for API mapping (400 validation/IB payload, 503 network).
+        error_detail: Machine-readable ``detail.error`` for clients.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        suggested_status: int = 400,
+        error_detail: str = "ibkr_flex_error",
+    ) -> None:
+        super().__init__(message)
+        self.suggested_status = suggested_status
+        self.error_detail = error_detail
 
 
 def _requests_proxies() -> Optional[Dict[str, str]]:
@@ -46,12 +63,61 @@ def _requests_proxies() -> Optional[Dict[str, str]]:
     return out
 
 
+def _flex_timeouts() -> Tuple[float, float]:
+    """(connect, read) seconds from env with safe bounds."""
+
+    def _parse(name: str, default: float) -> float:
+        raw = (os.environ.get(name) or "").strip()
+        if not raw:
+            return default
+        try:
+            v = float(raw)
+        except ValueError:
+            return default
+        return max(1.0, min(v, 600.0))
+
+    return (
+        _parse("IBKR_FLEX_CONNECT_TIMEOUT", _DEFAULT_CONNECT_TIMEOUT),
+        _parse("IBKR_FLEX_READ_TIMEOUT", _DEFAULT_READ_TIMEOUT),
+    )
+
+
+def _network_failure_message(*, phase: str, timeouts: Tuple[float, float]) -> str:
+    return (
+        f"{phase}：无法连接 IBKR 服务器（超时或网络不可达）。"
+        f"当前超时：连接 {timeouts[0]}s / 读取 {timeouts[1]}s。"
+        "请确认运行环境可访问 www.interactivebrokers.com:443；受限网络请设置 HTTPS_PROXY/HTTP_PROXY。"
+        "可通过环境变量 IBKR_FLEX_CONNECT_TIMEOUT、IBKR_FLEX_READ_TIMEOUT 延长等待。"
+    )
+
+
+def _flex_http_get(*, url: str, params: Dict[str, str], phase: str) -> requests.Response:
+    timeouts = _flex_timeouts()
+    try:
+        resp = requests.get(url, params=params, timeout=timeouts, proxies=_requests_proxies())
+        resp.raise_for_status()
+        return resp
+    except requests.Timeout as exc:
+        raise IbkrFlexError(
+            _network_failure_message(phase=phase, timeouts=timeouts),
+            suggested_status=503,
+            error_detail="ibkr_flex_network_error",
+        ) from exc
+    except requests.ConnectionError as exc:
+        raise IbkrFlexError(
+            _network_failure_message(phase=phase, timeouts=timeouts),
+            suggested_status=503,
+            error_detail="ibkr_flex_network_error",
+        ) from exc
+    except requests.HTTPError as exc:
+        raise IbkrFlexError(f"{phase} HTTP 错误: {exc}") from exc
+
+
 def send_flex_request(*, token: str, query_id: str) -> str:
     """Call SendRequest; return ReferenceCode (string)."""
     url = f"{FLEX_SERVLET_BASE}/FlexStatementService.SendRequest"
     params = {"t": token, "q": query_id, "v": FLEX_VERSION}
-    resp = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT, proxies=_requests_proxies())
-    resp.raise_for_status()
+    resp = _flex_http_get(url=url, params=params, phase="SendRequest")
     text = resp.text or ""
     if "<ErrorCode>" in text or "errorCode" in text.lower():
         code = _xml_find_text(text, "ErrorCode") or ""
@@ -70,8 +136,7 @@ def get_flex_statement(*, token: str, reference_code: str) -> str:
     params = {"t": token, "q": reference_code, "v": FLEX_VERSION}
     last_body = ""
     for attempt in range(1, MAX_GET_ATTEMPTS + 1):
-        resp = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT, proxies=_requests_proxies())
-        resp.raise_for_status()
+        resp = _flex_http_get(url=url, params=params, phase="GetStatement")
         last_body = resp.text or ""
         lower = last_body.lower()
         if PROGRESS_PHRASE in lower:
@@ -159,18 +224,145 @@ def _infer_market_and_symbol(
     return canonical_stock_code(sym), "us"
 
 
-def parse_open_positions_from_csv(text: str) -> List[Dict[str, Any]]:
-    """Parse Flex CSV text; extract Open Positions rows into normalized dicts."""
-    if not text or not text.strip():
-        raise IbkrFlexError("Empty Flex statement body")
+def _normalize_csv_first_cell(cell: Optional[str]) -> str:
+    """Strip BOM/quotes from first column (Flex sometimes emits `ClientAccountID"`)."""
+    s = (cell or "").strip().lstrip("\ufeff")
+    if s.endswith('"') and len(s) > 1:
+        s = s[:-1].strip()
+    return s
 
-    # Strip BOM
-    if text.startswith("\ufeff"):
-        text = text[1:]
 
+def _row_has_all_columns(row: List[str], *names: str) -> bool:
+    present = {str(c).strip() for c in row if c is not None and str(c).strip()}
+    return all(n in present for n in names)
+
+
+def _parse_positions_client_account_id_csv(text: str) -> List[Dict[str, Any]]:
+    """Parse Open Positions from Flex CSV using ClientAccountID section headers.
+
+    Matches common Flex Query layout: first header row has ``ClientAccountID`` in column 0
+    and includes Quantity / MarkPrice / PositionValue; data rows until the next
+    ``ClientAccountID`` header. Only ``LevelOfDetail == SUMMARY`` rows are kept when
+    that column exists.
+    """
     reader = csv.reader(io.StringIO(text))
-    rows: List[List[str]] = [list(r) for r in reader]
+    header_index: Dict[str, int] = {}
+    in_section = False
+    out: List[Dict[str, Any]] = []
 
+    for row in reader:
+        if not row:
+            continue
+        first = _normalize_csv_first_cell(row[0])
+
+        if not in_section:
+            if (
+                first == "ClientAccountID"
+                and _row_has_all_columns(row, "Quantity")
+                and (
+                    _row_has_all_columns(row, "MarkPrice")
+                    or _row_has_all_columns(row, "Mark Price")
+                )
+                and (
+                    _row_has_all_columns(row, "PositionValue")
+                    or _row_has_all_columns(row, "Position Value")
+                )
+            ):
+                header_index = {str(name).strip(): idx for idx, name in enumerate(row) if str(name).strip()}
+                in_section = True
+            continue
+
+        if first == "ClientAccountID":
+            break
+
+        def col(*candidates: str) -> Optional[str]:
+            for name in candidates:
+                idx = header_index.get(name)
+                if idx is None or idx >= len(row):
+                    continue
+                raw = row[idx]
+                if raw is None:
+                    continue
+                s = str(raw).strip()
+                if s:
+                    return s
+            return None
+
+        level_raw = col("LevelOfDetail", "Level Of Detail")
+        if level_raw and level_raw.strip().upper() != "SUMMARY":
+            continue
+
+        qty_raw = _parse_float(col("Quantity"))
+        if qty_raw is None or abs(qty_raw) < 1e-12:
+            continue
+
+        raw_sym = col("Symbol")
+        if not raw_sym:
+            continue
+
+        mult = _parse_float(col("Mult", "Multiplier")) or 1.0
+        qty_eff = abs(float(qty_raw) * float(mult))
+
+        asset_cat = col("AssetClass", "Asset Category") or ""
+        listing_ex = col("ListingExchange", "Listing Exchange") or ""
+        cur = (col("CurrencyPrimary", "Currency") or "USD").upper()
+
+        mark_price = _parse_float(col("MarkPrice", "Mark Price")) or 0.0
+        position_value = _parse_float(col("PositionValue", "Position Value"))
+        cost_basis = _parse_float(col("CostBasisMoney", "Cost Basis Money"))
+        fifo_unreal = _parse_float(
+            col("FifoPnlUnrealized", "Fifo Pnl Unrealized", "Unrealized PnL", "UnrealizedPnL")
+        )
+
+        if cost_basis is None and position_value is not None:
+            u = fifo_unreal if fifo_unreal is not None else 0.0
+            cost_basis = position_value - u
+
+        if cost_basis is None or qty_eff < 1e-12:
+            continue
+
+        if mark_price == 0.0 and position_value is not None and qty_eff > 1e-12:
+            mark_price = position_value / qty_eff
+
+        close_price = mark_price if mark_price else 0.0
+        if close_price == 0.0 and position_value is not None and qty_eff > 1e-12:
+            close_price = position_value / qty_eff
+
+        avg_cost = cost_basis / qty_eff
+
+        symbol, market = _infer_market_and_symbol(
+            raw_symbol=raw_sym,
+            asset_category=asset_cat,
+            listing_exchange=listing_ex,
+            currency=cur,
+        )
+
+        mv_local = position_value
+        if mv_local is None and close_price:
+            mv_local = qty_eff * close_price
+
+        out.append(
+            {
+                "symbol": symbol,
+                "market": market,
+                "currency": cur,
+                "quantity": qty_eff,
+                "avg_cost": float(avg_cost),
+                "total_cost": float(cost_basis),
+                "last_price": float(close_price or 0.0),
+                "market_value_local": float(mv_local) if mv_local is not None else None,
+                "unrealized_pnl_local": float(fifo_unreal) if fifo_unreal is not None else None,
+                "asset_category": asset_cat,
+                "listing_exchange": listing_ex,
+                "raw_symbol": raw_sym,
+            }
+        )
+
+    return out
+
+
+def _parse_legacy_open_positions_from_rows(rows: List[List[str]]) -> List[Dict[str, Any]]:
+    """Legacy parser: section title row ``Open Positions`` + following table."""
     sections: List[Tuple[str, List[str], List[List[str]]]] = []
     i = 0
     while i < len(rows):
@@ -234,7 +426,11 @@ def parse_open_positions_from_csv(text: str) -> List[Dict[str, Any]]:
         i += 1
 
     if not sections:
-        raise IbkrFlexError("No Open Positions section found in Flex CSV")
+        raise IbkrFlexError(
+            "No open positions block found: need either a header row whose first column is "
+            "ClientAccountID and which includes Quantity plus MarkPrice (or Mark Price) and "
+            "PositionValue (or Position Value), or a legacy section titled Open Positions."
+        )
 
     header, data_rows = sections[0][1], sections[0][2]
     if not header:
@@ -331,6 +527,31 @@ def parse_open_positions_from_csv(text: str) -> List[Dict[str, Any]]:
         )
 
     return out
+
+
+def parse_open_positions_from_csv(text: str) -> List[Dict[str, Any]]:
+    """Parse Flex CSV text; extract open positions into normalized dicts.
+
+    Resolution order:
+
+    1. **ClientAccountID table** — header row with first cell ``ClientAccountID`` and columns
+       ``Quantity`` plus mark/price and position value (see ``_parse_positions_client_account_id_csv``).
+       Only ``LevelOfDetail == SUMMARY`` rows are kept when that column exists.
+    2. **Legacy** — section introduced by a row whose first cell is the title ``Open Positions``.
+    """
+    if not text or not text.strip():
+        raise IbkrFlexError("Empty Flex statement body")
+
+    if text.startswith("\ufeff"):
+        text = text[1:]
+
+    client = _parse_positions_client_account_id_csv(text)
+    if client:
+        return client
+
+    reader = csv.reader(io.StringIO(text))
+    rows: List[List[str]] = [list(r) for r in reader]
+    return _parse_legacy_open_positions_from_rows(rows)
 
 
 def fetch_ibkr_flex_open_positions(

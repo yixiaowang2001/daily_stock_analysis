@@ -58,6 +58,20 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertFalse(items["GEMINI_API_KEY"]["is_masked"])
         self.assertTrue(items["GEMINI_API_KEY"]["raw_value_exists"])
 
+    def test_resolve_ibkr_flex_credentials_reads_env_file_without_relying_on_singleton(self) -> None:
+        """Portfolio IBKR refresh must see .env updates even if Config env was not reloaded."""
+        self._rewrite_env(
+            "STOCK_LIST=600519",
+            "IBKR_FLEX_TOKEN=tok-from-disk",
+            "IBKR_FLEX_QUERY_ID=424242",
+        )
+        os.environ.pop("IBKR_FLEX_TOKEN", None)
+        os.environ.pop("IBKR_FLEX_QUERY_ID", None)
+        Config.reset_instance()
+        token, query_id = self.service.resolve_ibkr_flex_credentials()
+        self.assertEqual(token, "tok-from-disk")
+        self.assertEqual(query_id, "424242")
+
     def test_export_desktop_env_returns_raw_text(self) -> None:
         self.env_path.write_text(
             "# Desktop config\nSTOCK_LIST=600519,000001\n\nGEMINI_API_KEY=secret-key-value\n",

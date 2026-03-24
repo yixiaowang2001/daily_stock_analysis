@@ -13,7 +13,12 @@
 2. 查询中需包含 **Open Positions**，输出格式为 **CSV**。
 3. 生成 **Flex Web Service Token**，记下 **Query ID**。
 
-若列名与默认解析器不一致（不同模板字段名不同），需调整 `src/services/ibkr_flex_service.py` 中的列名映射。
+CSV 布局支持两种常见形态（`parse_open_positions_from_csv` 会先尝试 1，再回退 2）：
+
+1. **ClientAccountID 表格式**（多数 Flex Query 默认）：某一行的第一列为字面量 `ClientAccountID`，且同一行同时包含 `Quantity` 以及 `MarkPrice`（或 `Mark Price`）与 `PositionValue`（或 `Position Value`）。数据行读到下一行第一列再次为 `ClientAccountID` 为止。若存在 `LevelOfDetail` 列，仅保留值为 `SUMMARY` 的行（忽略 LOT 等明细）。成本优先读 `CostBasisMoney`；缺失时用 `PositionValue - FifoPnlUnrealized`（无浮盈列时按 0）估算。
+2. **旧版「Open Positions」标题段**：首列单元格为标题 `Open Positions` 的区块（历史模板）。
+
+若列名仍不一致，可在 `src/services/ibkr_flex_service.py` 中扩展列名别名。
 
 ## 服务端环境变量
 
@@ -22,6 +27,10 @@
 | `IBKR_FLEX_TOKEN` | Flex Web Service Token |
 | `IBKR_FLEX_QUERY_ID` | Flex Query ID |
 | `HTTPS_PROXY` / `HTTP_PROXY` | 可选，受限网络访问 IB 时使用 |
+| `IBKR_FLEX_CONNECT_TIMEOUT` | 可选，连接超时秒数（默认 10，上限 600） |
+| `IBKR_FLEX_READ_TIMEOUT` | 可选，读取超时秒数（默认 120，上限 600） |
+
+若本机无法直连 `www.interactivebrokers.com:443`（常见于连接超时），需使用可访问 IB 的网络出口或配置上述代理；拉取失败时 API 会返回 **503**，`detail.error` 为 `ibkr_flex_network_error`，并在 `message` 中说明超时与代理。
 
 可在 **Web 系统设置 → 基础设置 → 券商账号连接** 中填写 Token 与 Query ID（与 `.env` 等价，保存后写入已持久化配置）。模板亦见仓库根目录 `.env.example`。
 
@@ -32,7 +41,7 @@
 | `POST` | `/api/v1/portfolio/ibkr-flex/refresh` | JSON body：`{"account_id": <int>}`，拉取 Flex、更新缓存并刷新该账户快照 |
 | `DELETE` | `/api/v1/portfolio/ibkr-flex/cache?account_id=<int>` | 清除该账户 Flex 缓存，之后持仓恢复为本地成交重算 |
 
-未配置 Token/Query ID 时，`refresh` 返回 **503**，`detail.error` 为 `ibkr_flex_not_configured`。
+未配置 Token/Query ID 时，`refresh` 返回 **503**，`detail.error` 为 `ibkr_flex_not_configured`。网络不可达时返回 **503**，`detail.error` 为 `ibkr_flex_network_error`。
 
 ## 组合语义（重要）
 

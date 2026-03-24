@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from src.config import (
     SUPPORTED_LLM_CHANNEL_PROTOCOLS,
     Config,
+    get_config,
     _get_litellm_provider,
     _uses_direct_env_provider,
     canonicalize_llm_channel_protocol,
@@ -192,6 +193,21 @@ class SystemConfigService:
             "items": items,
             "updated_at": self._manager.get_updated_at(),
         }
+
+    def resolve_ibkr_flex_credentials(self) -> Tuple[str, str]:
+        """Return (token, query_id) for IBKR Flex Web Service.
+
+        Prefer the on-disk `.env` (same source as system settings) per field, then
+        fall back to :func:`get_config` / process environment. This avoids stale
+        :class:`Config` singleton values after manual `.env` edits or partial reloads.
+        """
+        display = self._build_display_config_map(self._manager.read_config_map())
+        file_token = (display.get("IBKR_FLEX_TOKEN") or "").strip()
+        file_query = (display.get("IBKR_FLEX_QUERY_ID") or "").strip()
+        cfg = get_config()
+        token = file_token or (getattr(cfg, "ibkr_flex_token", None) or "").strip()
+        query_id = file_query or (getattr(cfg, "ibkr_flex_query_id", None) or "").strip()
+        return token, query_id
 
     def validate(self, items: Sequence[Dict[str, str]], mask_token: str = "******") -> Dict[str, Any]:
         """Validate submitted items without writing to `.env`."""

@@ -7,8 +7,9 @@ import logging
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
+from api.deps import get_system_config_service
 from api.v1.schemas.common import ErrorResponse
 from api.v1.schemas.portfolio import (
     PortfolioAccountCreateRequest,
@@ -34,7 +35,6 @@ from api.v1.schemas.portfolio import (
     PortfolioTradeListResponse,
     PortfolioTradeCreateRequest,
 )
-from src.config import get_config
 from src.services.ibkr_flex_service import IbkrFlexError, fetch_ibkr_flex_open_positions
 from src.services.portfolio_import_service import PortfolioImportService
 from src.services.portfolio_risk_service import PortfolioRiskService
@@ -44,6 +44,7 @@ from src.services.portfolio_service import (
     PortfolioOversellError,
     PortfolioService,
 )
+from src.services.system_config_service import SystemConfigService
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,15 @@ def _bad_request(exc: Exception) -> HTTPException:
     return HTTPException(
         status_code=400,
         detail={"error": "validation_error", "message": str(exc)},
+    )
+
+
+def _ibkr_flex_http_exception(exc: IbkrFlexError) -> HTTPException:
+    status = getattr(exc, "suggested_status", 400)
+    err = getattr(exc, "error_detail", "ibkr_flex_error")
+    return HTTPException(
+        status_code=status,
+        detail={"error": err, "message": str(exc)},
     )
 
 
@@ -542,16 +552,21 @@ def commit_csv_import(
     },
     summary="Fetch IBKR Flex Open Positions and refresh portfolio snapshot for one account",
 )
-def refresh_ibkr_flex_positions(request: PortfolioIbkrFlexRefreshRequest) -> PortfolioIbkrFlexRefreshResponse:
-    config = get_config()
-    token = (getattr(config, "ibkr_flex_token", None) or "").strip()
-    query_id = (getattr(config, "ibkr_flex_query_id", None) or "").strip()
+def refresh_ibkr_flex_positions(
+    request: PortfolioIbkrFlexRefreshRequest,
+    system_config: SystemConfigService = Depends(get_system_config_service),
+) -> PortfolioIbkrFlexRefreshResponse:
+    token, query_id = system_config.resolve_ibkr_flex_credentials()
     if not token or not query_id:
         raise HTTPException(
             status_code=503,
             detail={
                 "error": "ibkr_flex_not_configured",
-                "message": "Set IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID in the server environment.",
+                "message": (
+                    "Configure IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID in system settings "
+                    "(or .env), then retry. If you already saved, ensure the API process "
+                    "uses the same ENV_FILE path as the settings page."
+                ),
             },
         )
 
@@ -566,7 +581,7 @@ def refresh_ibkr_flex_positions(request: PortfolioIbkrFlexRefreshRequest) -> Por
     try:
         positions, meta = fetch_ibkr_flex_open_positions(token=token, query_id=query_id, save_csv_path=None)
     except IbkrFlexError as exc:
-        raise _bad_request(exc)
+        raise _ibkr_flex_http_exception(exc)
     except Exception as exc:
         raise _internal_error("IBKR Flex fetch failed", exc)
 

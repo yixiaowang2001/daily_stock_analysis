@@ -1149,9 +1149,14 @@ const PortfolioPage: React.FC = () => {
         <Card padding="md">
           <h3 className="text-sm font-semibold text-foreground mb-2">IBKR Flex 持仓同步</h3>
           <p className="text-xs text-secondary mb-3">
-            在服务器环境配置 IBKR_FLEX_TOKEN、IBKR_FLEX_QUERY_ID（Client Portal Flex Query 须包含 Open Positions 且输出 CSV）。
+            在系统设置或 .env 中配置 IBKR_FLEX_TOKEN、IBKR_FLEX_QUERY_ID（Client Portal Flex Query 须包含 Open Positions 且输出 CSV）。
             同步后持仓以 IB 报表为准；现金仍来自本账户资金流水；已实现盈亏等不与本地成交合并。清除缓存后恢复按成交重算。
           </p>
+          {writeBlocked && hasAccounts ? (
+            <p className="text-xs text-amber-400/90 mb-2">
+              请先在右上角账户下拉框中选择具体组合账户（勿选「全部」），否则无法拉取或清除 IBKR 缓存。
+            </p>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
