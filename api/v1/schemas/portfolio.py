@@ -251,6 +251,23 @@ class PortfolioFxRefreshResponse(BaseModel):
     error_count: int
 
 
+class PortfolioIbkrFlexRefreshRequest(BaseModel):
+    account_id: int = Field(..., ge=1)
+
+
+class PortfolioIbkrFlexRefreshResponse(BaseModel):
+    account_id: int
+    synced_at: str
+    position_count: int
+    reference_code: Optional[str] = None
+    snapshot_as_of: str
+
+
+class PortfolioIbkrFlexCacheDeleteResponse(BaseModel):
+    account_id: int
+    deleted: bool
+
+
 class PortfolioRiskResponse(BaseModel):
     as_of: str
     account_id: Optional[int] = None

@@ -581,6 +581,42 @@ class PortfolioServiceTestCase(unittest.TestCase):
                     with repo.portfolio_write_session():
                         pass
 
+    def test_ibkr_flex_cache_overrides_trade_replay(self) -> None:
+        account = self.service.create_account(
+            name="IBKR",
+            broker="ibkr",
+            market="us",
+            base_currency="USD",
+        )
+        aid = account["id"]
+        self.service.repo.upsert_ibkr_flex_cache(
+            account_id=aid,
+            positions=[
+                {
+                    "symbol": "AAPL",
+                    "market": "us",
+                    "currency": "USD",
+                    "quantity": 2.0,
+                    "avg_cost": 100.0,
+                    "total_cost": 200.0,
+                    "last_price": 120.0,
+                    "market_value_local": 240.0,
+                    "unrealized_pnl_local": 40.0,
+                }
+            ],
+            statement_meta={"reference_code": "X"},
+        )
+        snap = self.service.get_portfolio_snapshot(account_id=aid, cost_method="fifo")
+        acct = snap["accounts"][0]
+        self.assertEqual(len(acct["positions"]), 1)
+        self.assertEqual(acct["positions"][0]["symbol"], "AAPL")
+        self.assertAlmostEqual(acct["total_market_value"], 240.0, places=4)
+
+        self.assertTrue(self.service.repo.delete_ibkr_flex_cache(aid))
+        snap2 = self.service.get_portfolio_snapshot(account_id=aid, cost_method="fifo")
+        acct2 = snap2["accounts"][0]
+        self.assertEqual(len(acct2["positions"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

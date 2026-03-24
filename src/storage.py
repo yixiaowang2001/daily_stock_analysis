@@ -567,6 +567,19 @@ class PortfolioDailySnapshot(Base):
     )
 
 
+class PortfolioIbkrFlexCache(Base):
+    """Last IBKR Flex Open Positions snapshot per portfolio account (overrides trade replay)."""
+
+    __tablename__ = 'portfolio_ibkr_flex_cache'
+
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), primary_key=True)
+    synced_at = Column(DateTime, nullable=False, default=datetime.now, index=True)
+    positions_json = Column(Text, nullable=False)
+    statement_meta_json = Column(Text)
+    account_filter = Column(String(128))
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class PortfolioFxRate(Base):
     """Cached FX rates used for cross-currency portfolio conversion."""
 

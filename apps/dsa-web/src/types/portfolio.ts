@@ -297,3 +297,16 @@ export interface PortfolioFxRefreshResponse {
   staleCount: number;
   errorCount: number;
 }
+
+export interface PortfolioIbkrFlexRefreshResponse {
+  accountId: number;
+  syncedAt: string;
+  positionCount: number;
+  referenceCode?: string | null;
+  snapshotAsOf: string;
+}
+
+export interface PortfolioIbkrFlexCacheDeleteResponse {
+  accountId: number;
+  deleted: boolean;
+}

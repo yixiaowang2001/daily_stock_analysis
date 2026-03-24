@@ -89,6 +89,9 @@ from api.v1.schemas.portfolio import (
     PortfolioImportBrokerItem,
     PortfolioImportBrokerListResponse,
     PortfolioFxRefreshResponse,
+    PortfolioIbkrFlexRefreshRequest,
+    PortfolioIbkrFlexRefreshResponse,
+    PortfolioIbkrFlexCacheDeleteResponse,
     PortfolioRiskResponse,
 )
 
@@ -168,5 +171,8 @@ __all__ = [
     "PortfolioImportBrokerItem",
     "PortfolioImportBrokerListResponse",
     "PortfolioFxRefreshResponse",
+    "PortfolioIbkrFlexRefreshRequest",
+    "PortfolioIbkrFlexRefreshResponse",
+    "PortfolioIbkrFlexCacheDeleteResponse",
     "PortfolioRiskResponse",
 ]

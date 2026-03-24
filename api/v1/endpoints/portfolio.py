@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -22,6 +22,9 @@ from api.v1.schemas.portfolio import (
     PortfolioDeleteResponse,
     PortfolioEventCreatedResponse,
     PortfolioFxRefreshResponse,
+    PortfolioIbkrFlexCacheDeleteResponse,
+    PortfolioIbkrFlexRefreshRequest,
+    PortfolioIbkrFlexRefreshResponse,
     PortfolioImportBrokerListResponse,
     PortfolioImportCommitResponse,
     PortfolioImportParseResponse,
@@ -31,6 +34,8 @@ from api.v1.schemas.portfolio import (
     PortfolioTradeListResponse,
     PortfolioTradeCreateRequest,
 )
+from src.config import get_config
+from src.services.ibkr_flex_service import IbkrFlexError, fetch_ibkr_flex_open_positions
 from src.services.portfolio_import_service import PortfolioImportService
 from src.services.portfolio_risk_service import PortfolioRiskService
 from src.services.portfolio_service import (
@@ -524,6 +529,87 @@ def commit_csv_import(
         raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("Commit CSV import failed", exc)
+
+
+@router.post(
+    "/ibkr-flex/refresh",
+    response_model=PortfolioIbkrFlexRefreshResponse,
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+    summary="Fetch IBKR Flex Open Positions and refresh portfolio snapshot for one account",
+)
+def refresh_ibkr_flex_positions(request: PortfolioIbkrFlexRefreshRequest) -> PortfolioIbkrFlexRefreshResponse:
+    config = get_config()
+    token = (getattr(config, "ibkr_flex_token", None) or "").strip()
+    query_id = (getattr(config, "ibkr_flex_query_id", None) or "").strip()
+    if not token or not query_id:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "ibkr_flex_not_configured",
+                "message": "Set IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID in the server environment.",
+            },
+        )
+
+    service = PortfolioService()
+    account = service.repo.get_account(request.account_id, include_inactive=False)
+    if account is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": f"Account not found: {request.account_id}"},
+        )
+
+    try:
+        positions, meta = fetch_ibkr_flex_open_positions(token=token, query_id=query_id, save_csv_path=None)
+    except IbkrFlexError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("IBKR Flex fetch failed", exc)
+
+    synced_at = datetime.now()
+    service.repo.upsert_ibkr_flex_cache(
+        account_id=request.account_id,
+        positions=positions,
+        statement_meta=meta,
+    )
+
+    try:
+        snap = service.get_portfolio_snapshot(account_id=request.account_id, cost_method="fifo")
+    except Exception as exc:
+        raise _internal_error("Portfolio snapshot refresh failed", exc)
+
+    return PortfolioIbkrFlexRefreshResponse(
+        account_id=request.account_id,
+        synced_at=synced_at.isoformat(),
+        position_count=len(positions),
+        reference_code=(meta or {}).get("reference_code"),
+        snapshot_as_of=str(snap.get("as_of") or ""),
+    )
+
+
+@router.delete(
+    "/ibkr-flex/cache",
+    response_model=PortfolioIbkrFlexCacheDeleteResponse,
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Remove IBKR Flex position cache for an account (revert to trade replay)",
+)
+def delete_ibkr_flex_cache(account_id: int = Query(..., ge=1, description="Portfolio account id")) -> PortfolioIbkrFlexCacheDeleteResponse:
+    service = PortfolioService()
+    account = service.repo.get_account(account_id, include_inactive=False)
+    if account is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": f"Account not found: {account_id}"},
+        )
+    try:
+        deleted = service.repo.delete_ibkr_flex_cache(account_id)
+        return PortfolioIbkrFlexCacheDeleteResponse(account_id=account_id, deleted=bool(deleted))
+    except Exception as exc:
+        raise _internal_error("Delete IBKR Flex cache failed", exc)
 
 
 @router.post(

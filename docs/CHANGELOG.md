@@ -11,12 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### 改进
 
+- 🖥️ **系统设置：券商账号连接** — 「基础设置」新增「券商账号连接」卡片，下拉选择 IBKR 后可配置 `IBKR_FLEX_TOKEN`、`IBKR_FLEX_QUERY_ID`（已注册至 `config_registry`）；与组合页 Flex 拉仓共用同一套环境键。
 - 🖥️ **Dashboard 面板统一化（PR7-2）** — 新增 `DashboardPanelHeader` 和 `DashboardStateBlock` 作为历史、报告、资讯、任务和透明度等面板的通用组件；统一了各面板标题层级、加载/空态/错误态和 CSS 变量 token。
 - 🖥️ **HomePage 状态边界收口（PR7-2）** — 引入 `useHomeDashboardState` hook，集中 `stockPoolStore` 状态选取逻辑，移除 `HomePage` 中重复的本地状态派生和回调定义。
 
 ### 测试
 
 - 🧪 **Dashboard 组件测试覆盖率扩展（PR7-2）** — 新增 `ReportNews` 和 `TaskPanel` 测试；对 `HistoryList`、`ReportDetails`、`HomePage`、`useDashboardLifecycle` 和 `stockPoolStore` 增强了断言覆盖，包括删除回退、移动端抽屉和任务生命周期等场景。
+- 🧪 **IBKR Flex 与组合缓存** — 新增 `tests/test_ibkr_flex_service.py`；`test_portfolio_service` 增加 Flex 缓存覆盖成交重算的回归用例。
 
 ### 修复
 
@@ -27,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - 🧩 **个股分析页补齐关联板块展示**（#669）— A 股分析写路径现在会把 `belong_boards` 一次性写入 `fundamental_context` / `fundamental_snapshot`，结构化报告详情同步新增 `belong_boards` 与 `sector_rankings` 字段，Web 个股分析页首屏可直接展示所属板块及其是否命中当日板块涨跌榜；无数据时保持 fail-open 隐藏，不影响现有分析主流程。
 ### 新功能
 
+- 📈 **组合：IBKR Flex 持仓同步** — 支持通过 IBKR Client Portal 的 Flex Web Service（`IBKR_FLEX_TOKEN` + `IBKR_FLEX_QUERY_ID`）拉取含 Open Positions 的 CSV，按账户缓存后覆盖成交重算持仓；现金仍来自本地资金流水。新增 API `POST /api/v1/portfolio/ibkr-flex/refresh`、`DELETE /api/v1/portfolio/ibkr-flex/cache`，Web 组合页提供同步与清除缓存操作。非 TWS 实时通道，有报表生成与轮询延迟。详见 `docs/portfolio_ibkr_flex.md`。
 - 🔔 **飞书通知双模式** — 定时/汇总推送支持在「自定义机器人 Webhook」与「企业应用 Open API（lark-oapi 主动发消息）」之间切换（`FEISHU_NOTIFICATION_MODE`）；Open API 模式需配置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_NOTIFY_RECEIVE_ID` 及可选 `FEISHU_NOTIFY_RECEIVE_ID_TYPE`。Web 系统设置「通知渠道」中按模式隐藏无关字段。与 `FEISHU_STREAM_ENABLED` 长连接收消息相互独立。
 - 💾 **桌面端 `.env` 备份/恢复入口**（#754）— 桌面模式下的系统设置页新增 `导出 .env` / `导入 .env` 按钮，可直接备份当前已保存配置，或把备份文件中的键值合并恢复到当前桌面端 `.env`；导入沿用现有 `config_version` 冲突保护与运行时重载链路，不改变现有桌面端便携模式路径。
 - 📊 **Tushare 股票列表获取工具** — 新增 `scripts/fetch_tushare_stock_list.py`，支持从 Tushare Pro 获取 A股、港股、美股列表信息并保存为 CSV，配有分页读取、智能限流、错误处理和进度提示；新增对应使用文档 `docs/TUSHARE_STOCK_LIST_GUIDE.md`。

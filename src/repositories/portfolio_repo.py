@@ -6,6 +6,7 @@ Provides DB access helpers for portfolio account/events/snapshot tables.
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -21,6 +22,7 @@ from src.storage import (
     PortfolioCorporateAction,
     PortfolioDailySnapshot,
     PortfolioFxRate,
+    PortfolioIbkrFlexCache,
     PortfolioPosition,
     PortfolioPositionLot,
     PortfolioTrade,
@@ -1083,3 +1085,75 @@ class PortfolioRepository:
                 existing.updated_at = datetime.now()
 
             session.commit()
+
+    # ------------------------------------------------------------------
+    # IBKR Flex cache (open positions snapshot per account)
+    # ------------------------------------------------------------------
+
+    def get_ibkr_flex_cache(self, account_id: int) -> Optional[Dict[str, Any]]:
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(PortfolioIbkrFlexCache).where(PortfolioIbkrFlexCache.account_id == account_id).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            positions: List[Dict[str, Any]] = []
+            try:
+                positions = json.loads(row.positions_json or "[]")
+            except json.JSONDecodeError:
+                positions = []
+            meta: Optional[Dict[str, Any]] = None
+            if row.statement_meta_json:
+                try:
+                    meta = json.loads(row.statement_meta_json)
+                except json.JSONDecodeError:
+                    meta = None
+            return {
+                "account_id": row.account_id,
+                "synced_at": row.synced_at,
+                "positions": positions if isinstance(positions, list) else [],
+                "statement_meta": meta,
+                "account_filter": row.account_filter,
+            }
+
+    def upsert_ibkr_flex_cache(
+        self,
+        *,
+        account_id: int,
+        positions: List[Dict[str, Any]],
+        statement_meta: Optional[Dict[str, Any]] = None,
+        account_filter: Optional[str] = None,
+    ) -> None:
+        now = datetime.now()
+        payload = json.dumps(positions, ensure_ascii=False)
+        meta_str = json.dumps(statement_meta, ensure_ascii=False) if statement_meta else None
+        with self.db.get_session() as session:
+            existing = session.execute(
+                select(PortfolioIbkrFlexCache).where(PortfolioIbkrFlexCache.account_id == account_id).limit(1)
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(
+                    PortfolioIbkrFlexCache(
+                        account_id=account_id,
+                        synced_at=now,
+                        positions_json=payload,
+                        statement_meta_json=meta_str,
+                        account_filter=(account_filter or None),
+                    )
+                )
+            else:
+                existing.synced_at = now
+                existing.positions_json = payload
+                existing.statement_meta_json = meta_str
+                if account_filter is not None:
+                    existing.account_filter = account_filter
+                existing.updated_at = now
+            session.commit()
+
+    def delete_ibkr_flex_cache(self, account_id: int) -> bool:
+        with self.db.get_session() as session:
+            result = session.execute(
+                delete(PortfolioIbkrFlexCache).where(PortfolioIbkrFlexCache.account_id == account_id)
+            )
+            session.commit()
+            return (result.rowcount or 0) > 0

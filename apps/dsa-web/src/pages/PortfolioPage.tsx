@@ -165,6 +165,9 @@ const PortfolioPage: React.FC = () => {
   const [csvParseResult, setCsvParseResult] = useState<PortfolioImportParseResponse | null>(null);
   const [csvCommitResult, setCsvCommitResult] = useState<PortfolioImportCommitResponse | null>(null);
   const [brokerLoadWarning, setBrokerLoadWarning] = useState<string | null>(null);
+  const [ibkrRefreshing, setIbkrRefreshing] = useState(false);
+  const [ibkrClearing, setIbkrClearing] = useState(false);
+  const [ibkrMessage, setIbkrMessage] = useState<string | null>(null);
 
   const [eventType, setEventType] = useState<EventType>('trade');
   const [eventDateFrom, setEventDateFrom] = useState('');
@@ -549,6 +552,50 @@ const PortfolioPage: React.FC = () => {
       setCsvCommitting(false);
     }
   };
+
+  const handleIbkrFlexRefresh = useCallback(async () => {
+    if (!writableAccountId) {
+      setWriteWarning('请先在右上角选择具体账户。');
+      return;
+    }
+    setWriteWarning(null);
+    setError(null);
+    setIbkrRefreshing(true);
+    setIbkrMessage(null);
+    try {
+      const r = await portfolioApi.refreshIbkrFlex(writableAccountId);
+      setIbkrMessage(
+        `已同步 ${r.positionCount} 条持仓，参考号 ${r.referenceCode ?? '-'}，快照日期 ${r.snapshotAsOf}。`,
+      );
+      await refreshPortfolioData();
+    } catch (err) {
+      setError(getParsedApiError(err));
+    } finally {
+      setIbkrRefreshing(false);
+    }
+  }, [writableAccountId, refreshPortfolioData]);
+
+  const handleIbkrFlexClearCache = useCallback(async () => {
+    if (!writableAccountId) {
+      setWriteWarning('请先在右上角选择具体账户。');
+      return;
+    }
+    setWriteWarning(null);
+    setError(null);
+    setIbkrClearing(true);
+    setIbkrMessage(null);
+    try {
+      const r = await portfolioApi.clearIbkrFlexCache(writableAccountId);
+      setIbkrMessage(
+        r.deleted ? '已清除 IBKR Flex 缓存，持仓将按本地成交重算。' : '当前无 IBKR Flex 缓存。',
+      );
+      await refreshPortfolioData();
+    } catch (err) {
+      setError(getParsedApiError(err));
+    } finally {
+      setIbkrClearing(false);
+    }
+  }, [writableAccountId, refreshPortfolioData]);
 
   const openDeleteDialog = (item: PendingDelete) => {
     if (!writableAccountId) {
@@ -1095,6 +1142,39 @@ const PortfolioPage: React.FC = () => {
             )}
             <button type="submit" className="btn-secondary w-full" disabled={!writableAccountId}>提交企业行为</button>
           </form>
+        </Card>
+      </section>
+
+      <section className="grid grid-cols-1 gap-3">
+        <Card padding="md">
+          <h3 className="text-sm font-semibold text-foreground mb-2">IBKR Flex 持仓同步</h3>
+          <p className="text-xs text-secondary mb-3">
+            在服务器环境配置 IBKR_FLEX_TOKEN、IBKR_FLEX_QUERY_ID（Client Portal Flex Query 须包含 Open Positions 且输出 CSV）。
+            同步后持仓以 IB 报表为准；现金仍来自本账户资金流水；已实现盈亏等不与本地成交合并。清除缓存后恢复按成交重算。
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={!writableAccountId || ibkrRefreshing}
+              onClick={() => void handleIbkrFlexRefresh()}
+            >
+              {ibkrRefreshing ? '同步中...' : '从 IBKR Flex 拉取持仓'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={!writableAccountId || ibkrClearing}
+              onClick={() => void handleIbkrFlexClearCache()}
+            >
+              {ibkrClearing ? '处理中...' : '清除 IBKR 缓存'}
+            </button>
+          </div>
+          {ibkrMessage ? (
+            <div className="text-xs text-secondary mt-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1.5">
+              {ibkrMessage}
+            </div>
+          ) : null}
         </Card>
       </section>
 

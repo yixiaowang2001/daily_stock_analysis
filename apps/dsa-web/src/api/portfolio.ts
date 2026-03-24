@@ -12,6 +12,8 @@ import type {
   PortfolioDeleteResponse,
   PortfolioEventCreatedResponse,
   PortfolioFxRefreshResponse,
+  PortfolioIbkrFlexCacheDeleteResponse,
+  PortfolioIbkrFlexRefreshResponse,
   PortfolioImportBrokerListResponse,
   PortfolioImportCommitResponse,
   PortfolioImportParseResponse,
@@ -137,6 +139,20 @@ export const portfolioApi = {
       params: buildFxRefreshParams(query),
     });
     return toCamelCase<PortfolioFxRefreshResponse>(response.data);
+  },
+
+  async refreshIbkrFlex(accountId: number): Promise<PortfolioIbkrFlexRefreshResponse> {
+    const response = await apiClient.post<Record<string, unknown>>('/api/v1/portfolio/ibkr-flex/refresh', {
+      account_id: accountId,
+    });
+    return toCamelCase<PortfolioIbkrFlexRefreshResponse>(response.data);
+  },
+
+  async clearIbkrFlexCache(accountId: number): Promise<PortfolioIbkrFlexCacheDeleteResponse> {
+    const response = await apiClient.delete<Record<string, unknown>>('/api/v1/portfolio/ibkr-flex/cache', {
+      params: { account_id: accountId },
+    });
+    return toCamelCase<PortfolioIbkrFlexCacheDeleteResponse>(response.data);
   },
 
   async createTrade(payload: PortfolioTradeCreateRequest): Promise<PortfolioEventCreatedResponse> {

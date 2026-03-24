@@ -1,11 +1,12 @@
 import type React from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth, useSystemConfig } from '../hooks';
 import { createParsedApiError, getParsedApiError, type ParsedApiError } from '../api/error';
 import { systemConfigApi } from '../api/systemConfig';
 import { ApiErrorAlert, Button, ConfirmDialog } from '../components/common';
 import {
   AuthSettingsCard,
+  BrokerConnectionCard,
   ChangePasswordCard,
   IntelligentImport,
   LLMChannelEditor,
@@ -31,6 +32,9 @@ function formatDesktopEnvFilename() {
   const time = `${pad(now.getHours())}${pad(now.getMinutes())}`;
   return `dsa-desktop-env_${date}_${time}.env`;
 }
+
+/** Keys shown in「券商账号连接」card instead of the generic base category form. */
+const BROKER_CONNECTION_KEYS = new Set(['IBKR_FLEX_TOKEN', 'IBKR_FLEX_QUERY_ID']);
 
 const SettingsPage: React.FC = () => {
   const { passwordChangeable } = useAuth();
@@ -98,6 +102,13 @@ const SettingsPage: React.FC = () => {
 
   // Hide channel-managed and legacy provider-specific LLM keys from the
   // generic form only when channel config is the active runtime source.
+  const brokerConnectionItems = useMemo(() => {
+    const list = itemsByCategory.base ?? [];
+    return list
+      .filter((item) => BROKER_CONNECTION_KEYS.has(item.key))
+      .sort((a, b) => (a.schema?.displayOrder ?? 9999) - (b.schema?.displayOrder ?? 9999));
+  }, [itemsByCategory]);
+
   const LLM_CHANNEL_KEY_RE = /^LLM_[A-Z0-9]+_(PROTOCOL|BASE_URL|API_KEY|API_KEYS|MODELS|EXTRA_HEADERS|ENABLED)$/;
   const AI_MODEL_HIDDEN_KEYS = new Set([
     'LLM_CHANNELS',
@@ -147,6 +158,8 @@ const SettingsPage: React.FC = () => {
         }
         return true;
       })
+      : activeCategory === 'base'
+        ? rawActiveItems.filter((item) => !BROKER_CONNECTION_KEYS.has(item.key))
       : activeCategory === 'system'
         ? rawActiveItems.filter((item) => !SYSTEM_HIDDEN_KEYS.has(item.key))
       : activeCategory === 'agent'
@@ -356,6 +369,14 @@ const SettingsPage: React.FC = () => {
                   ) : null}
                 </div>
               </SettingsSectionCard>
+            ) : null}
+            {activeCategory === 'base' ? (
+              <BrokerConnectionCard
+                items={brokerConnectionItems}
+                disabled={isSaving || isLoading}
+                onChange={setDraftValue}
+                issueByKey={issueByKey}
+              />
             ) : null}
             {activeCategory === 'base' ? (
               <SettingsSectionCard

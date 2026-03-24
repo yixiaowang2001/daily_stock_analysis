@@ -703,6 +703,10 @@ class Config:
     portfolio_risk_lookback_days: int = 180
     portfolio_fx_update_enabled: bool = True
 
+    # IBKR Flex Web Service (optional; Open Positions CSV sync for portfolio)
+    ibkr_flex_token: Optional[str] = None
+    ibkr_flex_query_id: Optional[str] = None
+
     # Discord 机器人状态
     discord_bot_status: str = "A股智能分析 | /help"
 
@@ -1362,7 +1366,9 @@ class Config:
                 field_name='PORTFOLIO_RISK_LOOKBACK_DAYS',
                 minimum=1,
             ),
-            portfolio_fx_update_enabled=os.getenv('PORTFOLIO_FX_UPDATE_ENABLED', 'true').lower() == 'true'
+            portfolio_fx_update_enabled=os.getenv('PORTFOLIO_FX_UPDATE_ENABLED', 'true').lower() == 'true',
+            ibkr_flex_token=os.getenv('IBKR_FLEX_TOKEN'),
+            ibkr_flex_query_id=os.getenv('IBKR_FLEX_QUERY_ID'),
         )
     
     @classmethod

@@ -1,3 +1,4 @@
+export * from './BrokerConnectionCard';
 export * from './LLMChannelEditor';
 export * from './SettingsAlert';
 export * from './ChangePasswordCard';

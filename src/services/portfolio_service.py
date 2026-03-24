@@ -462,7 +462,17 @@ class PortfolioService:
         }
 
         for account in account_rows:
-            account_snapshot = self._replay_account(account=account, as_of_date=as_of_date, cost_method=method)
+            flex_cache = self.repo.get_ibkr_flex_cache(account.id)
+            flex_positions = (flex_cache or {}).get("positions") or []
+            if flex_positions:
+                account_snapshot = self._snapshot_from_ibkr_flex(
+                    account=account,
+                    as_of_date=as_of_date,
+                    cost_method=method,
+                    cached_positions=list(flex_positions),
+                )
+            else:
+                account_snapshot = self._replay_account(account=account, as_of_date=as_of_date, cost_method=method)
 
             self.repo.replace_positions_lots_and_snapshot(
                 account_id=account.id,
@@ -724,6 +734,155 @@ class PortfolioService:
                 quantity_held = 0.0
 
         return quantity_held
+
+    def _cash_from_ledger_only(self, *, account: Any, as_of_date: date) -> Tuple[float, bool]:
+        """Sum cash ledger into account base currency (no trade or corporate impact)."""
+        cash_ledger = self.repo.list_cash_ledger(account.id, as_of=as_of_date)
+        cash_balances: Dict[str, float] = defaultdict(float)
+        fx_stale = False
+        for row in cash_ledger:
+            currency = self._normalize_currency(row.currency)
+            amount = float(row.amount or 0.0)
+            direction = (row.direction or "").strip().lower()
+            if direction == "in":
+                cash_balances[currency] += amount
+            elif direction == "out":
+                cash_balances[currency] -= amount
+            else:
+                raise ValueError(f"Unsupported cash direction: {row.direction}")
+        total_cash_base = 0.0
+        for currency, amount in cash_balances.items():
+            converted, stale, _ = self._convert_amount(
+                amount=amount,
+                from_currency=currency,
+                to_currency=account.base_currency,
+                as_of_date=as_of_date,
+            )
+            total_cash_base += converted
+            fx_stale = fx_stale or stale
+        return total_cash_base, fx_stale
+
+    def _snapshot_from_ibkr_flex(
+        self,
+        *,
+        account: Any,
+        as_of_date: date,
+        cost_method: str,
+        cached_positions: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Build snapshot from last IBKR Flex open positions; cash from ledger only.
+
+        Realized PnL / fees / taxes are not merged from local trades (MVP).
+        """
+        _ = self._normalize_cost_method(cost_method)
+        total_cash_base, fx_stale_cash = self._cash_from_ledger_only(account=account, as_of_date=as_of_date)
+        position_rows: List[Dict[str, Any]] = []
+        lot_rows: List[Dict[str, Any]] = []
+        market_value_base = 0.0
+        total_cost_base = 0.0
+        fx_stale = fx_stale_cash
+
+        for raw in cached_positions:
+            symbol = canonical_stock_code(str(raw.get("symbol") or ""))
+            if not symbol:
+                continue
+            market = self._normalize_market(str(raw.get("market") or "us"))
+            currency = self._normalize_currency(str(raw.get("currency") or "USD"))
+            qty = float(raw.get("quantity") or 0.0)
+            if qty <= EPS:
+                continue
+            total_cost_local = float(raw.get("total_cost") or 0.0)
+            avg_cost = float(raw.get("avg_cost") or 0.0)
+            last_price = float(raw.get("last_price") or 0.0)
+            mv_raw = raw.get("market_value_local")
+            if mv_raw is not None:
+                mv_local_f = float(mv_raw)
+            else:
+                mv_local_f = qty * last_price if last_price > 0 else 0.0
+
+            mv_b, stale_mv, _ = self._convert_amount(
+                amount=mv_local_f,
+                from_currency=currency,
+                to_currency=account.base_currency,
+                as_of_date=as_of_date,
+            )
+            cost_b, stale_c, _ = self._convert_amount(
+                amount=total_cost_local,
+                from_currency=currency,
+                to_currency=account.base_currency,
+                as_of_date=as_of_date,
+            )
+            fx_stale = fx_stale or stale_mv or stale_c
+            unrealized_b = mv_b - cost_b
+
+            position_rows.append(
+                {
+                    "symbol": symbol,
+                    "market": market,
+                    "currency": currency,
+                    "quantity": round(qty, 8),
+                    "avg_cost": round(avg_cost, 8),
+                    "total_cost": round(total_cost_local, 8),
+                    "last_price": round(last_price, 8),
+                    "market_value_base": round(mv_b, 8),
+                    "unrealized_pnl_base": round(unrealized_b, 8),
+                    "valuation_currency": account.base_currency,
+                }
+            )
+            lot_rows.append(
+                {
+                    "symbol": symbol,
+                    "market": market,
+                    "currency": currency,
+                    "open_date": as_of_date,
+                    "remaining_quantity": qty,
+                    "unit_cost": avg_cost,
+                    "source_trade_id": None,
+                }
+            )
+            market_value_base += mv_b
+            total_cost_base += cost_b
+
+        realized_pnl_base = 0.0
+        fees_total_base = 0.0
+        taxes_total_base = 0.0
+        unrealized_pnl_base = market_value_base - total_cost_base
+        total_equity_base = total_cash_base + market_value_base
+
+        account_payload = {
+            "account_id": account.id,
+            "account_name": account.name,
+            "owner_id": account.owner_id,
+            "broker": account.broker,
+            "market": account.market,
+            "base_currency": account.base_currency,
+            "as_of": as_of_date.isoformat(),
+            "cost_method": cost_method,
+            "total_cash": round(total_cash_base, 6),
+            "total_market_value": round(market_value_base, 6),
+            "total_equity": round(total_equity_base, 6),
+            "realized_pnl": round(realized_pnl_base, 6),
+            "unrealized_pnl": round(unrealized_pnl_base, 6),
+            "fee_total": round(fees_total_base, 6),
+            "tax_total": round(taxes_total_base, 6),
+            "fx_stale": fx_stale,
+            "positions": position_rows,
+        }
+
+        return {
+            "public": account_payload,
+            "payload": account_payload,
+            "positions_cache": position_rows,
+            "lots_cache": lot_rows,
+            "total_cash": float(total_cash_base),
+            "total_market_value": float(market_value_base),
+            "total_equity": float(total_equity_base),
+            "realized_pnl": float(realized_pnl_base),
+            "unrealized_pnl": float(unrealized_pnl_base),
+            "fee_total": float(fees_total_base),
+            "tax_total": float(taxes_total_base),
+            "fx_stale": fx_stale,
+        }
 
     def _replay_account(self, *, account: Any, as_of_date: date, cost_method: str) -> Dict[str, Any]:
         trades = self.repo.list_trades(account.id, as_of=as_of_date)

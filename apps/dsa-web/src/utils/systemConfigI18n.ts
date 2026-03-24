@@ -12,7 +12,7 @@ const categoryTitleMap: Record<SystemConfigCategory, string> = {
 };
 
 const categoryDescriptionMap: Partial<Record<SystemConfigCategory, string>> = {
-  base: '管理自选股与基础运行参数。',
+  base: '管理自选股、券商连接（IBKR Flex）与基础运行参数。',
   data_source: '管理行情数据源与优先级策略。',
   ai_model: '管理模型供应商、模型名称与推理参数。',
   notification: '管理机器人、Webhook 和消息推送配置。',
@@ -24,6 +24,8 @@ const categoryDescriptionMap: Partial<Record<SystemConfigCategory, string>> = {
 
 const fieldTitleMap: Record<string, string> = {
   STOCK_LIST: '自选股列表',
+  IBKR_FLEX_TOKEN: 'IBKR Flex Token',
+  IBKR_FLEX_QUERY_ID: 'IBKR Flex Query ID',
   TUSHARE_TOKEN: 'Tushare Token',
   BOCHA_API_KEYS: 'Bocha API Keys',
   TAVILY_API_KEYS: 'Tavily API Keys',
@@ -86,6 +88,8 @@ const fieldTitleMap: Record<string, string> = {
 
 const fieldDescriptionMap: Record<string, string> = {
   STOCK_LIST: '使用逗号分隔股票代码，例如：600519,300750。',
+  IBKR_FLEX_TOKEN: '在 IBKR Client Portal 生成的 Flex Web Service Token，用于拉取 Flex 报表（非 TWS）。',
+  IBKR_FLEX_QUERY_ID: '对应 Flex Query 的数字 ID；查询须包含 Open Positions 且导出为 CSV。保存后可在组合页使用「从 IBKR Flex 拉取持仓」。',
   TUSHARE_TOKEN: '用于接入 Tushare Pro 数据服务的凭据。',
   BOCHA_API_KEYS: '用于新闻检索的 Bocha 密钥，支持逗号分隔多个（最高优先级）。',
   TAVILY_API_KEYS: '用于新闻检索的 Tavily 密钥，支持逗号分隔多个。',
