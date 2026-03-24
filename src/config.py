@@ -538,7 +538,11 @@ class Config:
     
     # 飞书 Webhook
     feishu_webhook_url: Optional[str] = None
-    
+    # 飞书定时/汇总通知：webhook（自定义机器人 URL）或 open_api（企业应用 + lark-oapi 主动发消息）
+    feishu_notification_mode: str = "webhook"
+    feishu_notify_receive_id: Optional[str] = None  # 接收方：群 chat_id 或用户 open_id 等
+    feishu_notify_receive_id_type: str = "chat_id"  # chat_id | open_id | user_id | union_id
+
     # Telegram 配置（需要同时配置 Bot Token 和 Chat ID）
     telegram_bot_token: Optional[str] = None  # Bot Token（@BotFather 获取）
     telegram_chat_id: Optional[str] = None  # Chat ID
@@ -1170,6 +1174,13 @@ class Config:
             agent_event_alert_rules_json=os.getenv('AGENT_EVENT_ALERT_RULES_JSON', ''),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),
+            feishu_notification_mode=cls._parse_feishu_notification_mode(
+                os.getenv('FEISHU_NOTIFICATION_MODE', 'webhook')
+            ),
+            feishu_notify_receive_id=(os.getenv('FEISHU_NOTIFY_RECEIVE_ID') or None),
+            feishu_notify_receive_id_type=cls._parse_feishu_notify_receive_id_type(
+                os.getenv('FEISHU_NOTIFY_RECEIVE_ID_TYPE', 'chat_id')
+            ),
             telegram_bot_token=os.getenv('TELEGRAM_BOT_TOKEN'),
             telegram_chat_id=os.getenv('TELEGRAM_CHAT_ID'),
             telegram_message_thread_id=os.getenv('TELEGRAM_MESSAGE_THREAD_ID'),
@@ -1599,6 +1610,30 @@ class Config:
         return result
 
     @classmethod
+    def _parse_feishu_notification_mode(cls, value: str) -> str:
+        """Parse FEISHU_NOTIFICATION_MODE: webhook | open_api."""
+        v = (value or 'webhook').strip().lower()
+        if v in ('webhook', 'open_api'):
+            return v
+        logging.getLogger(__name__).warning(
+            "FEISHU_NOTIFICATION_MODE '%s' invalid, fallback to 'webhook' (valid: webhook/open_api)",
+            value,
+        )
+        return 'webhook'
+
+    @classmethod
+    def _parse_feishu_notify_receive_id_type(cls, value: str) -> str:
+        """Parse FEISHU_NOTIFY_RECEIVE_ID_TYPE for Feishu im.message.create receive_id_type."""
+        v = (value or 'chat_id').strip().lower()
+        if v in ('chat_id', 'open_id', 'user_id', 'union_id'):
+            return v
+        logging.getLogger(__name__).warning(
+            "FEISHU_NOTIFY_RECEIVE_ID_TYPE '%s' invalid, fallback to 'chat_id'",
+            value,
+        )
+        return 'chat_id'
+
+    @classmethod
     def _parse_report_type(cls, value: str) -> str:
         """Parse REPORT_TYPE, fallback to simple for invalid values (supports brief)."""
         v = (value or 'simple').strip().lower()
@@ -1983,9 +2018,14 @@ class Config:
             ))
 
         # --- Notification channels ---
+        feishu_open_api_ready = (
+            self.feishu_notification_mode == 'open_api'
+            and bool(self.feishu_app_id and self.feishu_app_secret and self.feishu_notify_receive_id)
+        )
         has_notification = bool(
             self.wechat_webhook_url
             or self.feishu_webhook_url
+            or feishu_open_api_ready
             or (self.telegram_bot_token and self.telegram_chat_id)
             or (self.email_sender and self.email_password)
             or (self.pushover_user_key and self.pushover_api_token)

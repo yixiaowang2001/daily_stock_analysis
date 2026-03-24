@@ -92,6 +92,7 @@ const SettingsPage: React.FC = () => {
 
   const rawActiveItems = itemsByCategory[activeCategory] || [];
   const rawActiveItemMap = new Map(rawActiveItems.map((item) => [item.key, String(item.value ?? '')]));
+  const feishuNotificationMode = (rawActiveItemMap.get('FEISHU_NOTIFICATION_MODE') || 'webhook').trim().toLowerCase();
   const hasConfiguredChannels = Boolean((rawActiveItemMap.get('LLM_CHANNELS') || '').trim());
   const hasLitellmConfig = Boolean((rawActiveItemMap.get('LITELLM_CONFIG') || '').trim());
 
@@ -150,6 +151,19 @@ const SettingsPage: React.FC = () => {
         ? rawActiveItems.filter((item) => !SYSTEM_HIDDEN_KEYS.has(item.key))
       : activeCategory === 'agent'
         ? rawActiveItems.filter((item) => !AGENT_HIDDEN_KEYS.has(item.key))
+      : activeCategory === 'notification'
+        ? rawActiveItems.filter((item) => {
+            if (feishuNotificationMode === 'open_api') {
+              if (item.key === 'FEISHU_WEBHOOK_URL') {
+                return false;
+              }
+            } else {
+              if (item.key === 'FEISHU_NOTIFY_RECEIVE_ID' || item.key === 'FEISHU_NOTIFY_RECEIVE_ID_TYPE') {
+                return false;
+              }
+            }
+            return true;
+          })
       : rawActiveItems;
   const desktopActionDisabled = isLoading || isSaving || isExportingEnv || isImportingEnv;
 

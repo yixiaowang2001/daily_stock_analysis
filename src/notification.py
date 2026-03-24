@@ -269,8 +269,8 @@ class NotificationService(
         if self._wechat_url:
             channels.append(NotificationChannel.WECHAT)
         
-        # 飞书
-        if self._feishu_url:
+        # 飞书（Webhook 或 Open API，见 FeishuSender.is_feishu_notification_configured）
+        if self.is_feishu_notification_configured():
             channels.append(NotificationChannel.FEISHU)
         
         # Telegram

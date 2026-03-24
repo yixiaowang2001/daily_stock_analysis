@@ -540,9 +540,19 @@ crontab -e
 
 ### 飞书
 
-1. 在飞书群聊中添加"自定义机器人"
+**方式 A：自定义机器人 Webhook**
+
+1. 在飞书群聊中添加「自定义机器人」
 2. 复制 Webhook URL
-3. 设置 `FEISHU_WEBHOOK_URL`
+3. 设置 `FEISHU_NOTIFICATION_MODE=webhook`（默认）与 `FEISHU_WEBHOOK_URL`
+
+**方式 B：企业应用 Open API（无需公网入站 Webhook）**
+
+1. 在飞书开放平台创建企业自建应用，开通发消息相关权限，将应用机器人拉入目标群
+2. 设置 `FEISHU_NOTIFICATION_MODE=open_api`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`
+3. 设置接收方：`FEISHU_NOTIFY_RECEIVE_ID`（如群 `chat_id`）及 `FEISHU_NOTIFY_RECEIVE_ID_TYPE`（默认 `chat_id`）
+
+说明：`FEISHU_STREAM_ENABLED` 为 WebSocket 长连接**接收**机器人消息，与上述两种**推送**分析报告的方式不同，可同时按需启用。
 
 ### Telegram
 

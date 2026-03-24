@@ -823,9 +823,33 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     # ------------------------------------------------------------------
     # Notification – Feishu
     # ------------------------------------------------------------------
+    "FEISHU_NOTIFICATION_MODE": {
+        "title": "Feishu Notification Mode",
+        "description": (
+            "How to send scheduled/batch Feishu notifications: "
+            "webhook = custom bot URL; open_api = tenant app (FEISHU_APP_ID/SECRET) + receive id, "
+            "no inbound public URL. Distinct from FEISHU_STREAM_ENABLED (WebSocket bot)."
+        ),
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "select",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "webhook",
+        "options": [
+            {"label": "自定义机器人 Webhook", "value": "webhook"},
+            {"label": "企业应用 Open API（SDK 主动推送）", "value": "open_api"},
+        ],
+        "validation": {"enum": ["webhook", "open_api"]},
+        "display_order": 11,
+    },
     "FEISHU_WEBHOOK_URL": {
         "title": "Feishu Webhook URL",
-        "description": "Webhook URL for Feishu (Lark) bot notifications.",
+        "description": (
+            "Custom Feishu bot Webhook URL. Used when FEISHU_NOTIFICATION_MODE=webhook. "
+            "Not used for open_api mode."
+        ),
         "category": "notification",
         "data_type": "string",
         "ui_control": "password",
@@ -839,7 +863,10 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "FEISHU_APP_ID": {
         "title": "Feishu App ID",
-        "description": "Feishu app bot App ID (for event-driven bot mode).",
+        "description": (
+            "Feishu enterprise app App ID. Required for open_api notifications, Stream bot, and Feishu Docs. "
+            "Grant im:message send permissions for bot push."
+        ),
         "category": "notification",
         "data_type": "string",
         "ui_control": "text",
@@ -853,7 +880,9 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "FEISHU_APP_SECRET": {
         "title": "Feishu App Secret",
-        "description": "Feishu app bot App Secret.",
+        "description": (
+            "Feishu enterprise app App Secret. Used with App ID for open_api, Stream, and Docs."
+        ),
         "category": "notification",
         "data_type": "string",
         "ui_control": "password",
@@ -864,6 +893,37 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "options": [],
         "validation": {},
         "display_order": 14,
+    },
+    "FEISHU_NOTIFY_RECEIVE_ID": {
+        "title": "Feishu Notify Receive ID",
+        "description": (
+            "Target chat_id, open_id, user_id, or union_id for open_api mode (must match "
+            "FEISHU_NOTIFY_RECEIVE_ID_TYPE). Bot must be in the group when using chat_id."
+        ),
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {},
+        "display_order": 15,
+    },
+    "FEISHU_NOTIFY_RECEIVE_ID_TYPE": {
+        "title": "Feishu Notify Receive ID Type",
+        "description": "Feishu im.message.create receive_id_type for FEISHU_NOTIFY_RECEIVE_ID.",
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "select",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "chat_id",
+        "options": ["chat_id", "open_id", "user_id", "union_id"],
+        "validation": {"enum": ["chat_id", "open_id", "user_id", "union_id"]},
+        "display_order": 16,
     },
     # ------------------------------------------------------------------
     # Notification – Telegram
@@ -880,7 +940,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 15,
+        "display_order": 17,
     },
     "TELEGRAM_CHAT_ID": {
         "title": "Telegram Chat ID",
@@ -894,7 +954,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 16,
+        "display_order": 18,
     },
     "TELEGRAM_MESSAGE_THREAD_ID": {
         "title": "Telegram Thread ID",
@@ -908,7 +968,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 17,
+        "display_order": 19,
     },
     # ------------------------------------------------------------------
     # Notification – Email

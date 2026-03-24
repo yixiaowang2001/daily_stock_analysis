@@ -63,6 +63,35 @@ class TestSlackFieldsRegistered(unittest.TestCase):
                             f"{key} should appear before Pushover")
 
 
+class TestFeishuNotificationFieldsRegistered(unittest.TestCase):
+    """Feishu dual-mode notification keys must be in the registry."""
+
+    _FEISHU_KEYS = (
+        "FEISHU_NOTIFICATION_MODE",
+        "FEISHU_WEBHOOK_URL",
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "FEISHU_NOTIFY_RECEIVE_ID",
+        "FEISHU_NOTIFY_RECEIVE_ID_TYPE",
+    )
+
+    def test_field_definitions_exist(self):
+        for key in self._FEISHU_KEYS:
+            field = get_field_definition(key)
+            self.assertEqual(field["category"], "notification", key)
+
+    def test_schema_response_includes_feishu_keys(self):
+        schema = build_schema_response()
+        notification_cat = next(
+            (c for c in schema["categories"] if c["category"] == "notification"),
+            None,
+        )
+        self.assertIsNotNone(notification_cat)
+        field_keys = {f["key"] for f in notification_cat["fields"]}
+        for key in self._FEISHU_KEYS:
+            self.assertIn(key, field_keys, key)
+
+
 class TestSensitiveFieldsUsePasswordControl(unittest.TestCase):
     """Every is_sensitive field must use ui_control='password' to avoid
     leaking secrets in the Web settings page."""

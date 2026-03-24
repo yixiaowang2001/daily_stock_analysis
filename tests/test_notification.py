@@ -425,6 +425,47 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertAlmostEqual(mock_post.call_count, 4, delta=1)
 
     @mock.patch("src.notification.get_config")
+    @mock.patch("bot.platforms.feishu_stream.FEISHU_SDK_AVAILABLE", True)
+    @mock.patch("bot.platforms.feishu_stream.FeishuReplyClient")
+    def test_send_to_feishu_open_api_via_notification_service(
+        self, mock_client_cls: mock.MagicMock, mock_get_config: mock.MagicMock
+    ):
+        mock_instance = mock.MagicMock()
+        mock_instance.send_to_chat.return_value = True
+        mock_client_cls.return_value = mock_instance
+        cfg = _make_config(
+            feishu_notification_mode="open_api",
+            feishu_app_id="cli_app",
+            feishu_app_secret="cli_sec",
+            feishu_notify_receive_id="oc_chat",
+            feishu_notify_receive_id_type="chat_id",
+        )
+        mock_get_config.return_value = cfg
+
+        service = NotificationService()
+        self.assertIn(NotificationChannel.FEISHU, service.get_available_channels())
+
+        ok = service.send("hello feishu open api")
+
+        self.assertTrue(ok)
+        mock_client_cls.assert_called_once_with("cli_app", "cli_sec")
+        mock_instance.send_to_chat.assert_called_once_with(
+            "oc_chat", "hello feishu open api", receive_id_type="chat_id"
+        )
+
+    @mock.patch("src.notification.get_config")
+    def test_feishu_open_api_not_configured_without_receive_id(self, mock_get_config: mock.MagicMock):
+        cfg = _make_config(
+            feishu_notification_mode="open_api",
+            feishu_app_id="a",
+            feishu_app_secret="b",
+            feishu_notify_receive_id=None,
+        )
+        mock_get_config.return_value = cfg
+        service = NotificationService()
+        self.assertNotIn(NotificationChannel.FEISHU, service.get_available_channels())
+
+    @mock.patch("src.notification.get_config")
     @mock.patch("requests.post")
     def test_send_to_pushover_via_notification_service(
         self, mock_post: mock.MagicMock, mock_get_config: mock.MagicMock

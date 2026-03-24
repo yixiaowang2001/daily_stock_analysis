@@ -451,9 +451,19 @@ crontab -e
 
 ### Feishu
 
+**Option A: Custom bot Webhook**
+
 1. Add "Custom Bot" in Feishu group chat
 2. Copy Webhook URL
-3. Set `FEISHU_WEBHOOK_URL`
+3. Set `FEISHU_NOTIFICATION_MODE=webhook` (default) and `FEISHU_WEBHOOK_URL`
+
+**Option B: Enterprise app Open API (no inbound public Webhook)**
+
+1. Create an enterprise app in Feishu Open Platform, enable IM send permissions, add the app bot to the target group
+2. Set `FEISHU_NOTIFICATION_MODE=open_api`, `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
+3. Set recipient: `FEISHU_NOTIFY_RECEIVE_ID` (e.g. group `chat_id`) and `FEISHU_NOTIFY_RECEIVE_ID_TYPE` (default `chat_id`)
+
+Note: `FEISHU_STREAM_ENABLED` uses WebSocket to **receive** bot events; it is separate from these two **push** modes for scheduled reports.
 
 ### Telegram
 

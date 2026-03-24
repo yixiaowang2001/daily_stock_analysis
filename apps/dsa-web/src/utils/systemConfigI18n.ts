@@ -51,6 +51,12 @@ const fieldTitleMap: Record<string, string> = {
   OPENAI_BASE_URL: 'OpenAI Base URL',
   OPENAI_MODEL: 'OpenAI 模型',
   WECHAT_WEBHOOK_URL: '企业微信 Webhook',
+  FEISHU_NOTIFICATION_MODE: '飞书通知方式',
+  FEISHU_WEBHOOK_URL: '飞书 Webhook 地址',
+  FEISHU_APP_ID: '飞书应用 App ID',
+  FEISHU_APP_SECRET: '飞书应用 App Secret',
+  FEISHU_NOTIFY_RECEIVE_ID: '飞书推送接收方 ID',
+  FEISHU_NOTIFY_RECEIVE_ID_TYPE: '飞书接收方 ID 类型',
   DINGTALK_APP_KEY: '钉钉 App Key',
   DINGTALK_APP_SECRET: '钉钉 App Secret',
   PUSHPLUS_TOKEN: 'PushPlus Token',
@@ -107,6 +113,16 @@ const fieldDescriptionMap: Record<string, string> = {
   OPENAI_BASE_URL: 'OpenAI 兼容 API 地址，例如 https://api.deepseek.com/v1。',
   OPENAI_MODEL: 'OpenAI 兼容模型名称，例如 gpt-4o-mini、deepseek-chat。',
   WECHAT_WEBHOOK_URL: '企业微信机器人 Webhook 地址。',
+  FEISHU_NOTIFICATION_MODE:
+    '定时/汇总分析报告发往飞书的方式：Webhook（自定义机器人 URL）或企业应用 Open API（App ID/Secret + 接收方 ID，无需公网入站地址）。与飞书 Stream 长连接收消息（FEISHU_STREAM_ENABLED）不同。',
+  FEISHU_WEBHOOK_URL: '飞书自定义机器人的 Webhook 地址；仅在「Webhook」模式下使用。',
+  FEISHU_APP_ID:
+    '飞书开放平台企业自建应用的 App ID。Open API 推送、机器人长连接、云文档等场景可共用；发消息需具备相应 IM 权限。',
+  FEISHU_APP_SECRET: '与 App ID 配对的应用密钥；请妥善保管。',
+  FEISHU_NOTIFY_RECEIVE_ID:
+    'Open API 模式下的接收方标识：群聊填 chat_id，或按所选类型填 open_id / user_id / union_id。机器人须已加入目标群。',
+  FEISHU_NOTIFY_RECEIVE_ID_TYPE:
+    '与「飞书推送接收方 ID」对应的 receive_id_type，需与飞书开放平台 im.message.create 要求一致。',
   DINGTALK_APP_KEY: '钉钉应用模式 App Key。',
   DINGTALK_APP_SECRET: '钉钉应用模式 App Secret。',
   PUSHPLUS_TOKEN: 'PushPlus 推送令牌。',
