@@ -19,6 +19,7 @@
    YFINANCE_PRIORITY=0
    ```
    这将优先使用 Yahoo Finance 数据源获取美股数据
+3. 若 Yahoo 侧不稳定，可**可选**配置美股 REST 兜底（在 yfinance 失败后才启用）：`ALPHA_VANTAGE_API_KEY`、`MASSIVE_API_KEY` 或 `POLYGON_API_KEY`、`TWELVE_DATA_API_KEY`（说明见 `.env.example`）。可用 `python scripts/probe_us_equity_apis.py` 本地验证密钥与解析。
 
 > 📌 相关 Issue: [#153](https://github.com/ZhuLinsen/daily_stock_analysis/issues/153)
 

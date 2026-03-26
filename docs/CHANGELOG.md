@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### 改进
 
+- **美股数据 REST 兜底** — 美股股票在 Yahoo Finance（yfinance）失败后，可按顺序尝试 Alpha Vantage、Massive/Polygon、Twelve Data（环境变量 `ALPHA_VANTAGE_API_KEY`、`MASSIVE_API_KEY` 或 `POLYGON_API_KEY`、`TWELVE_DATA_API_KEY`）；日线与实时行情均支持。美股指数仍仅走 yfinance。兜底数据复权口径可能与 yfinance 不一致。本地探测：`python scripts/probe_us_equity_apis.py`。
 - 🖥️ **系统设置：券商账号连接** — 「基础设置」新增「券商账号连接」卡片，下拉选择 IBKR 后可配置 `IBKR_FLEX_TOKEN`、`IBKR_FLEX_QUERY_ID`（已注册至 `config_registry`）；与组合页 Flex 拉仓共用同一套环境键。
 - 🖥️ **Dashboard 面板统一化（PR7-2）** — 新增 `DashboardPanelHeader` 和 `DashboardStateBlock` 作为历史、报告、资讯、任务和透明度等面板的通用组件；统一了各面板标题层级、加载/空态/错误态和 CSS 变量 token。
 - 🖥️ **HomePage 状态边界收口（PR7-2）** — 引入 `useHomeDashboardState` hook，集中 `stockPoolStore` 状态选取逻辑，移除 `HomePage` 中重复的本地状态派生和回调定义。

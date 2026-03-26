@@ -591,7 +591,8 @@ System defaults to AkShare (free), also supports other data sources:
 ### YFinance
 - Free, no configuration needed
 - Supports US/HK stock data
-- US stock historical and real-time data both use YFinance exclusively to avoid technical indicator errors from akshare's US stock adjustment issues
+- US stock historical and real-time data use YFinance first to avoid technical indicator issues from akshare's US adjustment behavior
+- Optional REST failover (after YFinance fails), in order: Alpha Vantage (`ALPHA_VANTAGE_API_KEY`), Massive/Polygon (`MASSIVE_API_KEY` or `POLYGON_API_KEY`), Twelve Data (`TWELVE_DATA_API_KEY`). US indices still use YFinance only. Free tiers have strict rate limits; failover prices may be delayed and adjustment may differ from YFinance. Local probe: `python scripts/probe_us_equity_apis.py`
 
 ---
 

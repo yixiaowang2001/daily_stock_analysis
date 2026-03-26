@@ -100,6 +100,9 @@ class RealtimeSource(Enum):
     TENCENT = "tencent"             # 腾讯直连
     SINA = "sina"                   # 新浪直连
     STOOQ = "stooq"                 # Stooq 美股兜底
+    ALPHA_VANTAGE = "alpha_vantage"  # Alpha Vantage（美股 REST 兜底）
+    MASSIVE = "massive"             # Massive（原 Polygon.io）美股 REST 兜底
+    TWELVE_DATA = "twelve_data"     # Twelve Data 美股 REST 兜底
     FALLBACK = "fallback"           # 降级兜底
 
 
