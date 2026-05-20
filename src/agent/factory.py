@@ -330,6 +330,34 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
     )
 
 
+def build_tail_chat_executor(config=None, skills: Optional[List[str]] = None):
+    """Build :class:`~src.agent.executor.AgentExecutor` for tail-tactics chat.
+
+    Always uses the single-agent ReAct path (ignores ``AGENT_ARCH``) so
+    multi-symbol scoring / review prompts are not run through the
+    multi-agent orchestrator.
+    """
+    from src.agent.executor import AgentExecutor
+    from src.agent.llm_adapter import LLMToolAdapter
+
+    if config is None:
+        from src.config import get_config
+        config = get_config()
+
+    registry = get_tool_registry()
+    prompt_state = resolve_skill_prompt_state(config, skills=skills)
+    llm_adapter = LLMToolAdapter(config)
+    return AgentExecutor(
+        tool_registry=registry,
+        llm_adapter=llm_adapter,
+        skill_instructions=prompt_state.skill_instructions,
+        default_skill_policy=prompt_state.default_skill_policy,
+        use_legacy_default_prompt=prompt_state.use_legacy_default_prompt,
+        max_steps=getattr(config, "agent_max_steps", AGENT_MAX_STEPS_DEFAULT),
+        timeout_seconds=getattr(config, "agent_orchestrator_timeout_s", 0),
+    )
+
+
 def _build_orchestrator(config, registry, llm_adapter, skill_manager, *, technical_skill_policy: str = ""):
     """Build and return an :class:`AgentOrchestrator` (multi-agent mode).
 

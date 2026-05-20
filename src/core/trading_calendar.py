@@ -13,7 +13,7 @@
 """
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional, Set
 from zoneinfo import ZoneInfo
 
@@ -216,3 +216,21 @@ def compute_effective_region(
     if not parts:
         return ""
     return "both" if len(parts) == 2 else parts[0]
+
+
+def next_cn_trading_day_after(from_date: date, *, max_step: int = 40) -> Optional[date]:
+    """
+    返回严格晚于 ``from_date`` 的第一个 A 股交易日（按 ``XSHG`` 日历；无 exchange-calendars 时退化为「跳过周末」）。
+
+    用于战术台：实验登记日 T 的「次日早盘」对应第一个开市日（通常为 T+1，遇长假顺延）。
+    """
+    cur = from_date + timedelta(days=1)
+    for _ in range(max_step):
+        if _XCALS_AVAILABLE:
+            if is_market_open("cn", cur):
+                return cur
+        else:
+            if cur.weekday() < 5:
+                return cur
+        cur += timedelta(days=1)
+    return None

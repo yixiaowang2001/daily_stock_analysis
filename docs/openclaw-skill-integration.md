@@ -2,6 +2,8 @@
 
 本文档说明如何通过 [openclaw](https://github.com/openclaw/openclaw) Skill 调用 daily_stock_analysis 的 REST API，实现在 openclaw 对话中触发股票分析的能力。
 
+> 本文只覆盖外部 openclaw / HTTP Skill 接入。仓库级 `dsa-stock-analysis`、`dsa-candidate-lab`、`tail-picking-agent` 的分工见 [DSA Agent Skill 接入说明](agent-skill-integration.md)。
+
 ## 概述
 
 - **集成方式**：openclaw Skill 通过 HTTP 调用 daily_stock_analysis（DSA）REST API

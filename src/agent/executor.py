@@ -520,6 +520,10 @@ class AgentExecutor:
             default_skill_policy_section = f"\n{self.default_skill_policy}\n"
         report_language = normalize_report_language((context or {}).get("report_language", "zh"))
         stock_code = (context or {}).get("stock_code", "")
+        if not stock_code and context:
+            _tb = context.get("tail_ranking_bundle") or context.get("tail_review_bundle")
+            if isinstance(_tb, dict) and _tb.get("primary_symbol"):
+                stock_code = str(_tb["primary_symbol"])
         market_role = get_market_role(stock_code, report_language)
         market_guidelines = get_market_guidelines(stock_code, report_language)
         prompt_template = (
@@ -571,6 +575,23 @@ class AgentExecutor:
                 context_msg = "[系统提供的历史分析上下文，可供参考对比]\n" + "\n".join(context_parts)
                 messages.append({"role": "user", "content": context_msg})
                 messages.append({"role": "assistant", "content": "好的，我已了解该股票的历史分析数据。请告诉我你想了解什么？"})
+
+            if context.get("tail_ranking_bundle"):
+                from src.services.tail_tactics_compose import format_tail_ranking_context_message
+
+                tail_msg = format_tail_ranking_context_message(context["tail_ranking_bundle"])
+                messages.append({"role": "user", "content": tail_msg})
+                messages.append(
+                    {"role": "assistant", "content": "好的，我会按尾盘候选逐票评分任务，结合截止时间内的证据进行分析。"}
+                )
+            if context.get("tail_review_bundle"):
+                from src.services.tail_tactics_compose import format_tail_review_context_message
+
+                rev_msg = format_tail_review_context_message(context["tail_review_bundle"])
+                messages.append({"role": "user", "content": rev_msg})
+                messages.append(
+                    {"role": "assistant", "content": "好的，我会结合次日早盘指标与评分结论做复盘。"}
+                )
 
         messages.append({"role": "user", "content": message})
 

@@ -1019,7 +1019,7 @@ python main.py --debug
 
 ## 本地 WebUI 管理界面
 
-WebUI 与 FastAPI API 服务共用同一服务进程，启动后可在浏览器中完成配置管理、手动分析、任务进度查看、历史报告、回测、持仓管理和智能导入等操作。认证、云服务器访问和 API 调用细节见下方说明。
+WebUI 与 FastAPI API 服务共用同一服务进程，启动后可在浏览器中完成配置管理、手动分析、任务进度查看、历史报告、回测、持仓管理和智能导入等操作。**尾盘战术台**（`/tail-tactics`）用于策略版本、实验登记与 Agent 逐票评分/复盘串联，详见 [尾盘战术台说明](tail-tactics-workbench.md)。认证、云服务器访问和 API 调用细节见下方说明。
 
 ### FastAPI API 服务
 
@@ -1127,6 +1127,7 @@ python main.py --serve-only --host 0.0.0.0 --port 8888
 - 分析完成后自动推送通知到配置的渠道
 - 此功能在 GitHub Actions 环境中会自动禁用
 - 另见 [openclaw Skill 集成指南](openclaw-skill-integration.md)
+- 仓库级股票 Agent Skill 的分工与接入方式见 [DSA Agent Skill 接入说明](agent-skill-integration.md)
 
 ---
 

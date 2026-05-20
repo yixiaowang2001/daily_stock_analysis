@@ -9,7 +9,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -145,8 +145,40 @@ async def get_strategies():
         default_strategy_id=payload.default_skill_id,
     )
 
+
+def _tail_ranking_header_enabled(http_request: Request) -> bool:
+    v = (http_request.headers.get("x-dsa-tail-ranking") or "").strip().lower()
+    return v in ("1", "true", "yes")
+
+
+def _maybe_persist_tail_archive(
+    *,
+    message: str,
+    response_content: str,
+    session_id: str,
+    context: Optional[Dict[str, Any]],
+    skills: Optional[List[str]],
+) -> Optional[Dict[str, Any]]:
+    """Archive tail-session chat output without letting persistence fail chat."""
+
+    try:
+        from src.services.tail_conversation_archive import maybe_persist_tail_conversation
+
+        outcome = maybe_persist_tail_conversation(
+            message=message,
+            response_content=response_content,
+            session_id=session_id,
+            context=context,
+            skills=skills,
+        )
+        return outcome.to_dict() if outcome is not None else None
+    except Exception:
+        logger.exception("tail conversation archive failed for session %s", session_id)
+        return None
+
+
 @router.post("/chat", response_model=ChatResponse)
-async def agent_chat(request: ChatRequest):
+async def agent_chat(request: ChatRequest, http_request: Request):
     """
     Chat with the AI Agent.
     """
@@ -159,7 +191,11 @@ async def agent_chat(request: ChatRequest):
     
     try:
         skills = request.effective_skills
-        executor = _build_executor(config, skills or None)
+        if _tail_ranking_header_enabled(http_request):
+            from src.agent.factory import build_tail_chat_executor
+            executor = build_tail_chat_executor(config, skills=skills or None)
+        else:
+            executor = _build_executor(config, skills or None)
 
         # Pass explicit skills into context for the orchestrator.
         # Direct assignment so caller-provided skills always take precedence
@@ -175,6 +211,14 @@ async def agent_chat(request: ChatRequest):
             lambda: executor.chat(message=request.message, session_id=session_id,
                                   context=ctx),
         )
+        if result.success:
+            _maybe_persist_tail_archive(
+                message=request.message,
+                response_content=result.content,
+                session_id=session_id,
+                context=ctx,
+                skills=skills,
+            )
 
         return ChatResponse(
             success=result.success,
@@ -371,7 +415,7 @@ async def agent_research(request: ResearchRequest):
 
 
 @router.post("/chat/stream")
-async def agent_chat_stream(request: ChatRequest):
+async def agent_chat_stream(request: ChatRequest, http_request: Request):
     """
     Chat with the AI Agent, streaming progress via SSE.
     Each SSE event is a JSON object with a 'type' field:
@@ -390,6 +434,8 @@ async def agent_chat_stream(request: ChatRequest):
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
 
+    use_tail = _tail_ranking_header_enabled(http_request)
+
     # Pass explicit skills into context for the orchestrator.
     # Direct assignment so caller-provided skills always take precedence.
     skills = request.effective_skills
@@ -406,13 +452,26 @@ async def agent_chat_stream(request: ChatRequest):
 
     def run_sync():
         try:
-            executor = _build_executor(config, skills or None)
+            if use_tail:
+                from src.agent.factory import build_tail_chat_executor
+                executor = build_tail_chat_executor(config, skills=skills or None)
+            else:
+                executor = _build_executor(config, skills or None)
             result = executor.chat(
                 message=request.message,
                 session_id=session_id,
                 progress_callback=progress_callback,
                 context=stream_ctx,
             )
+            tail_archive = None
+            if result.success:
+                tail_archive = _maybe_persist_tail_archive(
+                    message=request.message,
+                    response_content=result.content,
+                    session_id=session_id,
+                    context=stream_ctx,
+                    skills=skills,
+                )
             asyncio.run_coroutine_threadsafe(
                 queue.put({
                     "type": "done",
@@ -421,6 +480,7 @@ async def agent_chat_stream(request: ChatRequest):
                     "error": result.error,
                     "total_steps": result.total_steps,
                     "session_id": session_id,
+                    "tail_archive": tail_archive,
                 }),
                 loop,
             )

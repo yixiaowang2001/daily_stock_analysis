@@ -24,13 +24,22 @@ REQUIRED_SKILL_FILES = {
     "README.md",
     "analyze-issue/SKILL.md",
     "analyze-pr/SKILL.md",
+    "dsa-stock-analysis/SKILL.md",
     "fix-issue/SKILL.md",
+    "tail-picking-agent/SKILL.md",
+}
+
+REQUIRED_SKILL_SUPPORT_FILES = {
+    "dsa-stock-analysis/agents/openai.yaml",
+    "dsa-stock-analysis/scripts/collect_stock_context.py",
+    "tail-picking-agent/agents/openai.yaml",
 }
 
 REQUIRED_GITIGNORE_SNIPPETS = (
     ".claude/*",
     "!.claude/skills/",
     "!.claude/skills/**",
+    ".agents/skills/",
 )
 
 
@@ -88,6 +97,10 @@ def ensure_skill_files() -> None:
             content = path.read_text(encoding="utf-8")
             if relative_path != "README.md" and "AGENTS.md" not in content:
                 fail(f"{path.relative_to(ROOT)} must reference AGENTS.md as the rule source")
+    for relative_path in REQUIRED_SKILL_SUPPORT_FILES:
+        path = CLAUDE_SKILLS_DIR / relative_path
+        if not path.exists():
+            fail(f"missing repository skill support asset: {path.relative_to(ROOT)}")
 
 
 def ensure_gitignore_rules() -> None:

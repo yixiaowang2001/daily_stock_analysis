@@ -11,8 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [新功能] 尾盘战术台「策略与案例」合并原策略版本与案例库；策略版本 / 实验支持表格内查看（`ModalDialog` 悬浮窗）与删除；新增 `DELETE /api/v1/tail-tactics/strategy-versions/{id}`（有实验引用时 409）。
+- [新功能] 尾盘战术台新增候选池事实包：`GET /api/v1/tail-tactics/experiments/{id}/candidate-facts` 返回 DB-first 的 T 日日线、衍生特征、T+1 早盘指标缺口与数据新鲜度，评分 compose 自动注入该证据层供 Agent 独立判断。
+- [改进] 尾盘候选事实包在交易日尾盘评分窗口会尝试补充 14:40 前 1 分钟 K 证据，按 AkShare Eastmoney 历史分钟、AkShare 分钟缓存、efinance 历史分钟顺序 fail-open 回退，并记录每个数据源的成功/失败原因；分钟证据同步输出量能字段和尾盘 5 分钟量能派生指标，供 `price_volume` / `liquidity` 评分使用。
+- [新功能] 尾盘评分 compose 会将交给 Agent 的 `candidate_facts` 持久化到 `tail_candidate_fact_snapshot`，并提供 `GET /api/v1/tail-tactics/experiments/{id}/candidate-fact-snapshots` 追踪当时证据快照。
+- [改进] 尾盘评分 JSON 契约新增 `next_open_forecast`，要求评估报告给出 T+1 开盘方向、预估涨跌幅/价格区间与关键价位，并禁止盘后预测反向影响 14:40 评分。
+- [改进] 尾盘评分报告改为先输出中文阅读版（结论卡、关键证据、风险、开盘预判、观察条件），再将 `tail_score_result` JSON 放在末尾作为机器解析附录。
+- [改进] 尾盘 Agent 从强制横向排序改为逐票评分输出 `tail_score_result`，默认评分截止 T 日 14:40，并显式禁止使用 14:40 后行情、T 日收盘价或全天高点参与当时评分。
+- [新功能] 尾盘战术台支持「自动拉取并保存」早盘冲高指标：`POST /api/v1/tail-tactics/experiments/{id}/morning-metrics/auto-fetch`（AkShare 5 分钟 K + 日线回退）；实验页流式/排序结果区加高便于阅读。
+- [改进] 尾盘战术台移除实验标签：API 与页面不再提供 `tags` / `tags_json` 与按标签筛选；复盘 compose 仅要求 `tail_review_suggestions.case_summary`。
+- [新功能] 尾盘战术台支持删除实验：`DELETE /api/v1/tail-tactics/experiments/{id}`，案例库与实验详情提供确认后删除；服务端同时清理早盘指标与关联 Agent 会话消息。
+- [新功能] 问股 Agent 成功回答尾盘候选相关问题后会自动归档：显式战术台上下文写回原实验，普通聊天命中尾盘语义与 A 股代码时自动创建/更新尾盘实验并保存评估报告。
+- [改进] 尾盘策略版本、战术台文档和 Agent 评分提示明确拆分两层：第一层为用户/同花顺动态选股条件，第二层为 Agent 评估、动作分级、开盘预测与复盘权重。
+- [改进] 尾盘战术台页面表单与表格增加块级标签、内边距与区块间距，缓解文字与边框重叠。
+- [测试] 尾盘测试覆盖普通 Agent 聊天自动归档、去重更新，以及显式评分/复盘上下文写回实验。
+- [文档] 新增 [尾盘战术台说明](docs/tail-tactics-workbench.md)，并在 `docs/full-guide.md` 本地 WebUI 段加入口指引。
+- [测试] `tests/test_tail_tactics_api.py` 覆盖战术台策略版本 diff、**策略版本删除（409/204）**、实验 compose、早盘指标与 auto-fetch（mock）。
 - [修复] 问股 Agent 在未配置可用 LLM 时保留后端真实错误原因并维持 `done.success=false` 失败语义，避免前端把配置缺失误当成成功回答。
 - [文档] 补充 LLM 配置指南与 FAQ，明确问股 Agent 对 `LITELLM_CONFIG` / `LLM_CHANNELS` / legacy `GEMINI_*` `OPENAI_*` `ANTHROPIC_*` 的兼容优先级、回退路径与“不静默迁移旧配置”的结论。
+- [新功能] 尾盘战术台实验支持保存 `param_snapshot` 对话/参数快照，并将风控模式、验证周期、硬排除条件、评分权重与当日上下文传入 Agent 评分/复盘。
+- [改进] 尾盘评分 Agent 输出契约升级为包含 `action_level`、`factor_scores`、`risk_flags`、`next_day_watch` 与 `invalidation_conditions` 的结构化 JSON。
+- [文档] 新增 A 股尾盘选股智能体设计文档，明确对话闭环、风险闸门、评分契约与后续迭代路线。
+- [chore] 新增仓库级 `tail-picking-agent` skill，沉淀通过对话创建尾盘实验、触发评分与次日复盘的 DSA 工作流。
+- [chore] 新增仓库级 `dsa-stock-analysis` skill，沉淀以 DSA 拉取股票事实包、再由 Agent 独立判断持仓风险的问股工作流。
+- [文档] 新增 DSA Agent Skill 接入说明，明确 `dsa-stock-analysis`、`dsa-candidate-lab`、`tail-picking-agent` 与 openclaw HTTP Skill 的分工。
+- [chore] AI 资产校验纳入新增股票 skill，并将 `.agents/skills/` 明确为本地镜像目录。
 
 ## [3.14.1] - 2026-04-26
 

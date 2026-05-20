@@ -4,6 +4,8 @@ import { createApiError, isApiRequestError, parseApiError } from './error';
 
 export interface ChatStreamOptions {
   signal?: AbortSignal;
+  /** Extra headers (e.g. X-DSA-Tail-Ranking for tail tactics workbench). */
+  headers?: Record<string, string>;
 }
 
 export interface ChatRequest {
@@ -92,7 +94,10 @@ export const agentApi = {
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(options?.headers ?? {}),
+        },
         body: JSON.stringify(payload),
         credentials: 'include',
         signal: options?.signal,

@@ -74,6 +74,9 @@ verify_*.py
 !.claude/skills/
 !.claude/skills/**
 
+# local agent skill mirrors; .claude/skills is the versioned source of truth
+.agents/skills/
+
 # ignore static files
 static/
 /apps/dsa-desktop/dist/

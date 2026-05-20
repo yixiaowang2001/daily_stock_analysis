@@ -1,0 +1,4 @@
+interface:
+  display_name: "DSA 单票分析"
+  short_description: "用 DSA 拉取单只股票事实，再做持仓风险判断。"
+  default_prompt: "Use $dsa-stock-analysis to collect DSA facts for one stock and judge whether my position should be held, reduced, or exited."

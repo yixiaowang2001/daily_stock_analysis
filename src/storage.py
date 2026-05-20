@@ -42,6 +42,7 @@ from sqlalchemy import (
     desc,
     event,
     func,
+    update,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import (
@@ -606,6 +607,93 @@ class ConversationMessage(Base):
     role = Column(String(20), nullable=False)  # user, assistant, system
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class TailStrategyVersion(Base):
+    """尾盘战术：策略版本（Markdown 正文 + 版本标签，可追溯父版本）。"""
+
+    __tablename__ = 'tail_strategy_version'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    version_label = Column(String(64), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    body_markdown = Column(Text, nullable=False)
+    parent_version_id = Column(Integer, ForeignKey('tail_strategy_version.id'), nullable=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_tail_strategy_parent', 'parent_version_id'),
+    )
+
+
+class TailExperiment(Base):
+    """尾盘战术：单次实验（候选池、策略版本、评分会话、复盘与案例标签）。"""
+
+    __tablename__ = 'tail_experiment'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(Date, nullable=False, index=True)
+    strategy_version_id = Column(Integer, ForeignKey('tail_strategy_version.id'), nullable=False, index=True)
+    pasted_raw = Column(Text, nullable=False)
+    symbols_json = Column(Text, nullable=False)
+    param_snapshot_json = Column(Text, nullable=True)
+    ranking_session_id = Column(String(100), nullable=True, index=True)
+    ranking_output = Column(Text, nullable=True)
+    review_note_markdown = Column(Text, nullable=True)
+    case_summary = Column(String(500), nullable=True)
+    tags_json = Column(Text, nullable=True)
+    status = Column(String(32), nullable=False, default='draft', index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index('ix_tail_experiment_strategy_date', 'strategy_version_id', 'trade_date'),
+    )
+
+
+class TailMorningMetric(Base):
+    """尾盘战术：次日早盘冲高指标（首期支持手工录入）。"""
+
+    __tablename__ = 'tail_morning_metric'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    experiment_id = Column(
+        Integer,
+        ForeignKey('tail_experiment.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    symbol = Column(String(20), nullable=False)
+    surge_pct_prev_close_930_1000 = Column(Float, nullable=True)
+    source = Column(String(16), nullable=False, default='manual')
+    recorded_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint('experiment_id', 'symbol', name='uix_tail_morning_exp_sym'),
+        Index('ix_tail_morning_symbol', 'symbol'),
+    )
+
+
+class TailCandidateFactSnapshot(Base):
+    """尾盘战术：候选池事实包快照，记录 Agent 评分时看到的证据层。"""
+
+    __tablename__ = 'tail_candidate_fact_snapshot'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    experiment_id = Column(
+        Integer,
+        ForeignKey('tail_experiment.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    kind = Column(String(16), nullable=False, default='rank', index=True)
+    facts_json = Column(Text, nullable=False)
+    data_freshness_summary = Column(String(500), nullable=True)
+    generated_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_tail_fact_snapshot_exp_kind_time', 'experiment_id', 'kind', 'generated_at'),
+    )
 
 
 class LLMUsage(Base):
@@ -2020,6 +2108,354 @@ class DatabaseManager:
                 )
             )
             return result.rowcount
+
+    # ------------------------------------------------------------------
+    # Tail tactics workbench (strategy versions, experiments, morning metrics)
+    # ------------------------------------------------------------------
+
+    def create_tail_strategy_version(
+        self,
+        *,
+        version_label: str,
+        title: str,
+        body_markdown: str,
+        parent_version_id: Optional[int] = None,
+    ) -> int:
+        row = TailStrategyVersion(
+            version_label=version_label.strip(),
+            title=title.strip(),
+            body_markdown=body_markdown,
+            parent_version_id=parent_version_id,
+        )
+        with self.session_scope() as session:
+            session.add(row)
+            session.flush()
+            return int(row.id)
+
+    def list_tail_strategy_versions(self, limit: int = 100) -> List[Dict[str, Any]]:
+        with self.session_scope() as session:
+            stmt = (
+                select(TailStrategyVersion)
+                .order_by(desc(TailStrategyVersion.created_at))
+                .limit(limit)
+            )
+            rows = session.execute(stmt).scalars().all()
+            return [self._tail_strategy_row_to_dict(r) for r in rows]
+
+    def get_tail_strategy_version(self, version_id: int) -> Optional[Dict[str, Any]]:
+        with self.session_scope() as session:
+            row = session.get(TailStrategyVersion, version_id)
+            if row is None:
+                return None
+            return self._tail_strategy_row_to_dict(row)
+
+    def delete_tail_strategy_version(self, version_id: int) -> Optional[str]:
+        """
+        删除策略版本。若仍有实验引用该版本则拒绝。
+
+        Returns:
+            None 表示已删除；否则为错误码：``not_found`` | ``in_use``。
+        """
+        with self.session_scope() as session:
+            row = session.get(TailStrategyVersion, version_id)
+            if row is None:
+                return "not_found"
+            n_exp = (
+                session.execute(
+                    select(func.count(TailExperiment.id)).where(TailExperiment.strategy_version_id == version_id)
+                ).scalar()
+                or 0
+            )
+            if int(n_exp) > 0:
+                return "in_use"
+            session.execute(
+                update(TailStrategyVersion)
+                .where(TailStrategyVersion.parent_version_id == version_id)
+                .values(parent_version_id=None)
+            )
+            session.delete(row)
+            return None
+
+    @staticmethod
+    def _tail_strategy_row_to_dict(row: TailStrategyVersion) -> Dict[str, Any]:
+        return {
+            "id": row.id,
+            "version_label": row.version_label,
+            "title": row.title,
+            "body_markdown": row.body_markdown,
+            "parent_version_id": row.parent_version_id,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+    def create_tail_experiment(
+        self,
+        *,
+        trade_date: date,
+        strategy_version_id: int,
+        pasted_raw: str,
+        symbols: List[str],
+        param_snapshot: Optional[Dict[str, Any]] = None,
+        status: str = "draft",
+    ) -> int:
+        cleaned = [s.strip() for s in symbols if s and str(s).strip()]
+        if len(cleaned) > 10:
+            raise ValueError("symbols list must have at most 10 entries")
+        row = TailExperiment(
+            trade_date=trade_date,
+            strategy_version_id=strategy_version_id,
+            pasted_raw=pasted_raw,
+            symbols_json=json.dumps(cleaned, ensure_ascii=False),
+            param_snapshot_json=json.dumps(param_snapshot, ensure_ascii=False) if param_snapshot is not None else None,
+            tags_json=None,
+            status=status,
+        )
+        with self.session_scope() as session:
+            session.add(row)
+            session.flush()
+            return int(row.id)
+
+    def list_tail_experiments(
+        self,
+        *,
+        limit: int = 50,
+        strategy_version_id: Optional[int] = None,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
+    ) -> List[Dict[str, Any]]:
+        with self.session_scope() as session:
+            stmt = select(TailExperiment).order_by(desc(TailExperiment.trade_date), desc(TailExperiment.id))
+            if strategy_version_id is not None:
+                stmt = stmt.where(TailExperiment.strategy_version_id == strategy_version_id)
+            if from_date is not None:
+                stmt = stmt.where(TailExperiment.trade_date >= from_date)
+            if to_date is not None:
+                stmt = stmt.where(TailExperiment.trade_date <= to_date)
+            stmt = stmt.limit(limit)
+            rows = session.execute(stmt).scalars().all()
+            return [self._tail_experiment_row_to_dict(session, r) for r in rows]
+
+    def _tail_experiment_row_to_dict(self, session: Session, row: TailExperiment) -> Dict[str, Any]:
+        sym = json.loads(row.symbols_json) if row.symbols_json else []
+        param_snapshot: Optional[Dict[str, Any]] = None
+        if row.param_snapshot_json:
+            try:
+                parsed_snapshot = json.loads(row.param_snapshot_json)
+                if isinstance(parsed_snapshot, dict):
+                    param_snapshot = parsed_snapshot
+                else:
+                    param_snapshot = {"raw": parsed_snapshot}
+            except Exception:
+                param_snapshot = {"raw": row.param_snapshot_json}
+        metrics_count = session.execute(
+            select(func.count(TailMorningMetric.id)).where(TailMorningMetric.experiment_id == row.id)
+        ).scalar() or 0
+        return {
+            "id": row.id,
+            "trade_date": row.trade_date.isoformat() if row.trade_date else None,
+            "strategy_version_id": row.strategy_version_id,
+            "pasted_raw": row.pasted_raw,
+            "symbols": sym,
+            "param_snapshot": param_snapshot,
+            "ranking_session_id": row.ranking_session_id,
+            "ranking_output": row.ranking_output,
+            "review_note_markdown": row.review_note_markdown,
+            "case_summary": row.case_summary,
+            "status": row.status,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "morning_metrics_count": int(metrics_count),
+        }
+
+    def get_tail_experiment(self, experiment_id: int) -> Optional[Dict[str, Any]]:
+        with self.session_scope() as session:
+            row = session.get(TailExperiment, experiment_id)
+            if row is None:
+                return None
+            return self._tail_experiment_row_to_dict(session, row)
+
+    def patch_tail_experiment(self, experiment_id: int, updates: Dict[str, Any]) -> bool:
+        """Patch experiment fields. Only keys present in ``updates`` are written (None clears nullable fields)."""
+        allowed = {
+            "ranking_session_id",
+            "ranking_output",
+            "review_note_markdown",
+            "case_summary",
+            "param_snapshot",
+            "status",
+        }
+        payload = {k: v for k, v in updates.items() if k in allowed}
+        if not payload:
+            return False
+        with self.session_scope() as session:
+            row = session.get(TailExperiment, experiment_id)
+            if row is None:
+                return False
+            for k, v in payload.items():
+                if k == "param_snapshot":
+                    row.param_snapshot_json = json.dumps(v, ensure_ascii=False) if v is not None else None
+                else:
+                    setattr(row, k, v)
+            row.updated_at = datetime.now()
+            return True
+
+    def delete_tail_experiment(self, experiment_id: int) -> bool:
+        """删除实验及其早盘指标/事实快照，并清理关联的 Agent 会话消息。"""
+        tail_sid = f"tail_exp_{experiment_id}"
+        with self.session_scope() as session:
+            row = session.get(TailExperiment, experiment_id)
+            if row is None:
+                return False
+            ranking_sid = row.ranking_session_id
+            session.execute(
+                delete(ConversationMessage).where(ConversationMessage.session_id == tail_sid)
+            )
+            if ranking_sid:
+                session.execute(
+                    delete(ConversationMessage).where(ConversationMessage.session_id == ranking_sid)
+                )
+            session.execute(
+                delete(TailMorningMetric).where(TailMorningMetric.experiment_id == experiment_id)
+            )
+            session.execute(
+                delete(TailCandidateFactSnapshot).where(
+                    TailCandidateFactSnapshot.experiment_id == experiment_id
+                )
+            )
+            session.delete(row)
+            return True
+
+    def create_tail_candidate_fact_snapshot(
+        self,
+        *,
+        experiment_id: int,
+        kind: str,
+        facts: Dict[str, Any],
+    ) -> int:
+        """Persist the exact candidate facts bundle handed to an Agent workflow."""
+        clean_kind = (kind or "rank").strip()[:16] or "rank"
+        data_freshness = facts.get("data_freshness") if isinstance(facts, dict) else None
+        summary = None
+        if isinstance(data_freshness, dict):
+            raw_summary = data_freshness.get("summary")
+            if raw_summary is not None:
+                summary = str(raw_summary)[:500]
+        row = TailCandidateFactSnapshot(
+            experiment_id=experiment_id,
+            kind=clean_kind,
+            facts_json=json.dumps(facts, ensure_ascii=False),
+            data_freshness_summary=summary,
+            generated_at=datetime.now(),
+        )
+        with self.session_scope() as session:
+            if session.get(TailExperiment, experiment_id) is None:
+                raise ValueError("experiment not found")
+            session.add(row)
+            session.flush()
+            return int(row.id)
+
+    @staticmethod
+    def _tail_candidate_fact_snapshot_row_to_dict(row: TailCandidateFactSnapshot) -> Dict[str, Any]:
+        facts: Dict[str, Any]
+        try:
+            parsed = json.loads(row.facts_json) if row.facts_json else {}
+            facts = parsed if isinstance(parsed, dict) else {"raw": parsed}
+        except Exception:
+            facts = {"raw": row.facts_json}
+        return {
+            "id": row.id,
+            "experiment_id": row.experiment_id,
+            "kind": row.kind,
+            "facts": facts,
+            "data_freshness_summary": row.data_freshness_summary,
+            "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+        }
+
+    def list_tail_candidate_fact_snapshots(
+        self,
+        experiment_id: int,
+        *,
+        kind: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """List persisted facts snapshots for one tail experiment, newest first."""
+        with self.session_scope() as session:
+            if session.get(TailExperiment, experiment_id) is None:
+                raise ValueError("experiment not found")
+            stmt = (
+                select(TailCandidateFactSnapshot)
+                .where(TailCandidateFactSnapshot.experiment_id == experiment_id)
+                .order_by(desc(TailCandidateFactSnapshot.generated_at), desc(TailCandidateFactSnapshot.id))
+            )
+            if kind:
+                stmt = stmt.where(TailCandidateFactSnapshot.kind == kind.strip())
+            stmt = stmt.limit(limit)
+            rows = session.execute(stmt).scalars().all()
+            return [self._tail_candidate_fact_snapshot_row_to_dict(r) for r in rows]
+
+    def list_tail_morning_metrics(self, experiment_id: int) -> List[Dict[str, Any]]:
+        with self.session_scope() as session:
+            stmt = (
+                select(TailMorningMetric)
+                .where(TailMorningMetric.experiment_id == experiment_id)
+                .order_by(TailMorningMetric.symbol)
+            )
+            rows = session.execute(stmt).scalars().all()
+            return [
+                {
+                    "id": r.id,
+                    "experiment_id": r.experiment_id,
+                    "symbol": r.symbol,
+                    "surge_pct_prev_close_930_1000": r.surge_pct_prev_close_930_1000,
+                    "source": r.source,
+                    "recorded_at": r.recorded_at.isoformat() if r.recorded_at else None,
+                }
+                for r in rows
+            ]
+
+    def upsert_tail_morning_metrics(
+        self,
+        experiment_id: int,
+        items: List[Dict[str, Any]],
+    ) -> int:
+        """Insert or update morning metrics by (experiment_id, symbol). Returns affected row count."""
+        if not items:
+            return 0
+        count = 0
+        with self.session_scope() as session:
+            exp = session.get(TailExperiment, experiment_id)
+            if exp is None:
+                raise ValueError("experiment not found")
+            for it in items:
+                sym = str(it.get("symbol", "")).strip()
+                if not sym:
+                    continue
+                pct = it.get("surge_pct_prev_close_930_1000")
+                src = str(it.get("source") or "manual").strip() or "manual"
+                row = session.execute(
+                    select(TailMorningMetric).where(
+                        and_(
+                            TailMorningMetric.experiment_id == experiment_id,
+                            TailMorningMetric.symbol == sym,
+                        )
+                    )
+                ).scalars().first()
+                if row is None:
+                    session.add(
+                        TailMorningMetric(
+                            experiment_id=experiment_id,
+                            symbol=sym,
+                            surge_pct_prev_close_930_1000=pct,
+                            source=src,
+                            recorded_at=datetime.now(),
+                        )
+                    )
+                else:
+                    row.surge_pct_prev_close_930_1000 = pct
+                    row.source = src
+                    row.recorded_at = datetime.now()
+                count += 1
+            exp.updated_at = datetime.now()
+        return count
 
     # ------------------------------------------------------------------
     # LLM usage tracking

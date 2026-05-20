@@ -1,0 +1,6 @@
+interface:
+  display_name: "尾盘选股兼容入口"
+  short_description: "显式尾盘请求入口，实际映射到 DSA 候选池实验室。"
+  default_prompt: "Use $tail-picking-agent to run a DSA tail-session candidate experiment through the dsa-candidate-lab tail-session profile."
+policy:
+  allow_implicit_invocation: false

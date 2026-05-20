@@ -34,3 +34,5 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
 - `CLAUDE.md` must remain a symlink to `AGENTS.md`.
 - Use `.github/instructions/*.instructions.md` for path-specific guidance.
 - Current repository collaboration skills live in `.claude/skills/`; keep them aligned with `AGENTS.md`.
+- `.agents/skills/` is a local mirror/adaptation directory, not a second source of truth.
+- Stock-related skill boundaries are documented in `docs/agent-skill-integration.md`.
