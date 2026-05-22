@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [改进] `dsa-stock-analysis` skill 支持从任意工作目录采集股票事实、逐票分析小批量非策略股票，并通过 `agent_note` 将短中长线观点、支撑/压力/跌破位和数据截点保存到分析历史。
 - [新功能] 尾盘战术台「策略与案例」合并原策略版本与案例库；策略版本 / 实验支持表格内查看（`ModalDialog` 悬浮窗）与删除；新增 `DELETE /api/v1/tail-tactics/strategy-versions/{id}`（有实验引用时 409）。
 - [新功能] 尾盘战术台新增候选池事实包：`GET /api/v1/tail-tactics/experiments/{id}/candidate-facts` 返回 DB-first 的 T 日日线、衍生特征、T+1 早盘指标缺口与数据新鲜度，评分 compose 自动注入该证据层供 Agent 独立判断。
 - [改进] 尾盘候选事实包在交易日尾盘评分窗口会尝试补充 14:40 前 1 分钟 K 证据，按 AkShare Eastmoney 历史分钟、AkShare 分钟缓存、efinance 历史分钟顺序 fail-open 回退，并记录每个数据源的成功/失败原因；分钟证据同步输出量能字段和尾盘 5 分钟量能派生指标，供 `price_volume` / `liquidity` 评分使用。

@@ -8,7 +8,7 @@
 
 | Skill | 所属层级 | 适用场景 | 与本仓库的关系 |
 | --- | --- | --- | --- |
-| `dsa-stock-analysis` | 仓库级 skill | 单只股票、单个持仓、成本价下的持有/减仓/止损判断 | 复用 DSA 的行情、K 线、筹码、资金流、基本面、历史报告与搜索模块，输出事实包后由 Agent 独立判断 |
+| `dsa-stock-analysis` | 仓库级 skill，可软链接为用户级 / 全局 skill | 单只股票、单个持仓、小批量非策略股票逐票分析、成本价下的持有/减仓/止损判断、历史点位回看 | 复用 DSA 的行情、K 线、筹码、资金流、基本面、历史报告与搜索模块，输出事实包后由 Agent 独立判断；可将 Agent 时点研究笔记保存到 `analysis_history` |
 | `dsa-candidate-lab` | 用户级 / 全局 skill | 多候选池评分、策略实验、版本对比、复盘学习；包含尾盘、未来日/周动量等 profile | 以本仓库的尾盘战术台 API、存储、Web 页面和候选事实包作为当前主要落地面 |
 | `tail-picking-agent` | 仓库级兼容 skill | 用户明确提到尾盘选股智能体、尾盘实验、14:40 评分、T+1 复盘 | 兼容入口；新逻辑应映射到 `dsa-candidate-lab` 的 `tail-session-t1` profile |
 | `daily-stock-analysis` / openclaw Skill | 外部集成 skill | openclaw 或其他外部 Agent 通过 HTTP 调用 DSA REST API | 依赖已运行的 DSA API 服务，不是仓库协作规则真源 |
@@ -18,7 +18,7 @@
 
 ## 如何选择
 
-用户只问一只股票或一个持仓时，用 `dsa-stock-analysis`。
+用户只问一只股票、一个持仓，或给出少量股票并要求逐只分析而不是排名时，用 `dsa-stock-analysis`。
 
 典型请求：
 
@@ -26,9 +26,11 @@
 用 DSA 看一下 000021
 成本 31.038，这只要不要跑？
 帮我分析 AAPL 的支撑、压力和风险
+分别看一下 000021、AAPL、HK00700 的短中长线和跌破位
+昨天你给 000021 的跌破位是多少
 ```
 
-用户给出多个候选、要求排名、实验、复盘、策略版本或学习闭环时，用 `dsa-candidate-lab`。
+用户给出多个候选并要求排名、打分、实验、复盘、策略版本或学习闭环时，用 `dsa-candidate-lab`。
 
 典型请求：
 
@@ -62,6 +64,15 @@ ln -s "$PWD/.claude/skills/tail-picking-agent" ~/.codex/skills/tail-picking-agen
 ```
 
 如果同名目录已存在，先确认它是否是旧版本，避免覆盖用户级 skill。
+
+`dsa-stock-analysis` 的脚本支持从任意工作目录运行，会按 `DSA_REPO_ROOT`、软链接目标、当前目录和默认仓库路径查找 DSA 根目录，并在加载配置前切回仓库根目录，避免相对 `DATABASE_PATH` 写到错误位置。常用入口：
+
+```bash
+python ~/.codex/skills/dsa-stock-analysis/scripts/collect_stock_context.py 000021 AAPL --days 120 --save-db --include-latest-report
+python ~/.codex/skills/dsa-stock-analysis/scripts/save_stock_analysis_note.py note.json
+```
+
+其中 `save_stock_analysis_note.py` 用于把 Agent 生成的短线/中线/长线观点、支撑位、压力位、跌破位、建仓/持仓计划和数据截点保存成 `analysis_history.report_type=agent_note`，供后续按日期回看。短线点位默认只代表当时数据截点，后续对话读取时必须说明 `analysis_date` / `data_cutoff`，过了下一交易窗口应视为参考而非当前结论。
 
 ### 2. `dsa-candidate-lab`
 
@@ -104,6 +115,7 @@ http://localhost:8000
 ## 关键边界
 
 - `dsa-stock-analysis` 不负责候选池排名、策略版本、尾盘实验或复盘持久化。
+- `dsa-stock-analysis` 可以接少量股票并逐只输出，但不能把它变成横向评分、候选池排名或策略实验。
 - `dsa-candidate-lab` 可以复用单票事实包，但候选池评分、排名、输出契约与复盘学习由它负责。
 - `tail-picking-agent` 只保留兼容入口；新增跨策略逻辑不要继续塞进这个 alias。
 - `.agents/skills/` 如需存在，应视为 `.claude/skills/` 的本地镜像或适配目录，不作为手工维护的第二真源。
@@ -117,6 +129,7 @@ http://localhost:8000
 python scripts/check_ai_assets.py
 python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py .claude/skills/dsa-stock-analysis
 python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py .claude/skills/tail-picking-agent
+python -m py_compile .claude/skills/dsa-stock-analysis/scripts/collect_stock_context.py .claude/skills/dsa-stock-analysis/scripts/save_stock_analysis_note.py
 ```
 
 如修改 `dsa-stock-analysis` 的采集脚本，再补充：

@@ -32,6 +32,7 @@ REQUIRED_SKILL_FILES = {
 REQUIRED_SKILL_SUPPORT_FILES = {
     "dsa-stock-analysis/agents/openai.yaml",
     "dsa-stock-analysis/scripts/collect_stock_context.py",
+    "dsa-stock-analysis/scripts/save_stock_analysis_note.py",
     "tail-picking-agent/agents/openai.yaml",
 }
 

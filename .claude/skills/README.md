@@ -15,7 +15,7 @@
 | `analyze-issue` | 分析 GitHub Issue，生成仓库内评估产物 |
 | `analyze-pr` | 审查 PR 必要性、验证证据、实现风险与合入判断 |
 | `fix-issue` | 按 issue 修复流程读取上下文、实施改动并验证 |
-| `dsa-stock-analysis` | 通过 DSA 收集单只股票事实包，再做持仓/买卖/风险判断 |
+| `dsa-stock-analysis` | 通过 DSA 收集股票事实包，逐票输出短中长线、关键点位与持仓/买卖/风险判断，并可保存时点研究笔记 |
 | `tail-picking-agent` | 尾盘选股兼容入口，实际映射到 `dsa-candidate-lab` 的尾盘 profile |
 
 如果未来需要兼容其他 agent 目录（如 `.agents/skills/` 或 `.github/skills/`），应先明确单一真源，再通过脚本或镜像同步，而不是手工长期维护多份同义内容。

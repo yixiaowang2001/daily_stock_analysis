@@ -51,7 +51,8 @@ When working inside the DSA repository, follow root `AGENTS.md`.
 5. If no server is running and persistence is needed, use existing DSA Python storage/API objects rather than inventing a parallel format.
 6. Score only from data observable at or before `data_cutoff_time`. Full-day T bars are reference-only and must be labeled if used.
 7. Put a readable Chinese report first, then append machine-readable `tail_score_result` JSON.
-8. For reviews, fetch or accept morning metrics first, then save review notes and case summary when persistence is supported.
+8. Persist every real prediction/evaluation before final answer, including one-symbol prompts, and mention the experiment id.
+9. For reviews, fetch or accept morning metrics first, then save review notes and case summary when persistence is supported. If the original prediction only exists in Codex session logs, backfill it into DSA storage before writing the review.
 
 ## Output Contract
 
@@ -66,6 +67,7 @@ Each `tail_score_result` item should include:
 - `data_quality_flags`
 - `next_day_watch`
 - `next_open_forecast`
+- `morning_surge_forecast`：v1.5 起必填，描述 T+1 09:30-10:00 最高冲高的保守目标、强势突破目标、触发条件和失效条件。
 - `invalidation_conditions`
 - `one_line_reason`
 

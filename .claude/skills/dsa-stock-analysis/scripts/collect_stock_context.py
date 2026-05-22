@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
@@ -14,12 +15,46 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 
+DEFAULT_DSA_REPO_ROOT = Path("/Users/wangyixiao/Desktop/Files/Projects/daily_stock_analysis")
+
+
+def _is_repo_root(path: Path) -> bool:
+    return (path / "main.py").exists() and (path / "AGENTS.md").exists()
+
+
 def _find_repo_root() -> Path:
     current = Path(__file__).resolve()
-    for parent in (current.parent, *current.parents):
-        if (parent / "main.py").exists() and (parent / "AGENTS.md").exists():
-            return parent
-    raise RuntimeError("Could not locate DSA repository root")
+    candidates: List[Path] = []
+
+    env_root = os.getenv("DSA_REPO_ROOT")
+    if env_root:
+        candidates.append(Path(env_root).expanduser())
+
+    candidates.extend([current.parent, *current.parents])
+
+    try:
+        cwd = Path.cwd().resolve()
+        candidates.extend([cwd, *cwd.parents])
+    except Exception:
+        pass
+
+    candidates.append(DEFAULT_DSA_REPO_ROOT)
+
+    seen = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if _is_repo_root(resolved):
+            return resolved
+
+    raise RuntimeError(
+        "Could not locate DSA repository root. Set DSA_REPO_ROOT to the daily_stock_analysis path."
+    )
 
 
 REPO_ROOT = _find_repo_root()
@@ -103,7 +138,20 @@ def _latest_reports(db: Any, code: str, days: int, limit: int) -> List[Dict[str,
     reports = []
     for row in db.get_analysis_history(code=code, days=days, limit=limit):
         raw = _safe_json_loads(getattr(row, "raw_result", None)) or {}
+        context_snapshot = _safe_json_loads(getattr(row, "context_snapshot", None)) or {}
         dashboard = raw.get("dashboard") if isinstance(raw, dict) else None
+        raw_response = raw.get("raw_response") if isinstance(raw, dict) else None
+        agent_payload = raw_response
+        if isinstance(agent_payload, str):
+            agent_payload = _safe_json_loads(agent_payload)
+        if not isinstance(agent_payload, dict):
+            agent_payload = {}
+        battle_plan = dashboard.get("battle_plan") if isinstance(dashboard, dict) else None
+        sniper_points = (
+            battle_plan.get("sniper_points")
+            if isinstance(battle_plan, dict)
+            else None
+        )
         reports.append(
             {
                 "id": getattr(row, "id", None),
@@ -126,6 +174,23 @@ def _latest_reports(db: Any, code: str, days: int, limit: int) -> List[Dict[str,
                     if isinstance(dashboard, dict)
                     else None
                 ),
+                "agent_note_schema": agent_payload.get("schema"),
+                "analysis_date": (
+                    agent_payload.get("analysis_date")
+                    or context_snapshot.get("analysis_date")
+                ),
+                "data_cutoff": (
+                    agent_payload.get("data_cutoff")
+                    or context_snapshot.get("data_cutoff")
+                ),
+                "valid_until": (
+                    agent_payload.get("valid_until")
+                    or context_snapshot.get("valid_until")
+                ),
+                "levels": agent_payload.get("levels") or sniper_points,
+                "time_horizon": agent_payload.get("time_horizon"),
+                "factors": agent_payload.get("factors"),
+                "action_plan": agent_payload.get("action_plan"),
             }
         )
     return _jsonable(reports)
@@ -328,6 +393,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
+
+    os.chdir(REPO_ROOT)
 
     from src.config import get_config, setup_env
 
