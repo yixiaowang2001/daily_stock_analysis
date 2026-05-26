@@ -855,6 +855,7 @@ class DataFetcherManager:
           3. BaostockFetcher (Priority 3)
           4. YfinanceFetcher (Priority 4)
           5. LongbridgeFetcher (Priority 5) - 长桥（美股/港股兜底）
+          6. IwencaiFetcher (Priority 90) - 同花顺问财低优先级兜底（需 IWENCAI_API_KEY）
         """
         from .efinance_fetcher import EfinanceFetcher
         from .akshare_fetcher import AkshareFetcher
@@ -863,6 +864,7 @@ class DataFetcherManager:
         from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
         from .longbridge_fetcher import LongbridgeFetcher
+        from .iwencai_fetcher import IwencaiFetcher
         # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
         efinance = EfinanceFetcher()
         akshare = AkshareFetcher()
@@ -871,6 +873,7 @@ class DataFetcherManager:
         baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
         longbridge = LongbridgeFetcher()  # 长桥（美股/港股兜底，懒加载）
+        iwencai = IwencaiFetcher()        # 问财（仅低优先级兜底，配额受限）
 
         # 初始化数据源列表
         self._ensure_concurrency_guards()
@@ -884,6 +887,8 @@ class DataFetcherManager:
                 yfinance,
                 longbridge,
             ]
+            if iwencai.is_available():
+                self._fetchers.append(iwencai)
 
             # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0）
             self._fetchers.sort(key=lambda f: f.priority)
@@ -1190,6 +1195,10 @@ class DataFetcherManager:
             )
             if primary_quote is not None:
                 return primary_quote
+            iwencai_quote = self._try_fetcher_quote(stock_code, "IwencaiFetcher")
+            if iwencai_quote is not None:
+                logger.info(f"[实时行情] {market_label} {stock_code} 使用 IwencaiFetcher 兜底成功")
+                return iwencai_quote
             if log_final_failure:
                 logger.info(f"[实时行情] {market_label} {stock_code} 无可用数据源")
             return None
@@ -1204,6 +1213,10 @@ class DataFetcherManager:
         
         for source in source_priority:
             source = source.strip().lower()
+
+            if source == "iwencai" and primary_quote is not None:
+                logger.debug(f"[实时行情] {stock_code} 已有基础行情，跳过 Iwencai 补字段以保留配额")
+                continue
             
             try:
                 quote = None
@@ -1244,6 +1257,14 @@ class DataFetcherManager:
                     # 尝试 TushareFetcher（需要 Tushare Pro 积分）
                     for fetcher in self._get_fetchers_snapshot():
                         if fetcher.name == "TushareFetcher":
+                            if hasattr(fetcher, 'get_realtime_quote'):
+                                quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', raw_stock_code or stock_code)
+                            break
+
+                elif source == "iwencai":
+                    # 尝试同花顺问财 OpenAPI（配额小，仅作为尾部兜底）
+                    for fetcher in self._get_fetchers_snapshot():
+                        if fetcher.name == "IwencaiFetcher":
                             if hasattr(fetcher, 'get_realtime_quote'):
                                 quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', raw_stock_code or stock_code)
                             break

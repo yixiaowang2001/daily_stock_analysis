@@ -125,6 +125,7 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public SearXNG instances from `searx.space` when `SEARXNG_BASE_URLS` is empty (default `true`) | Optional |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/weborder/#/login?reg=834638) Token | Optional |
 | `TICKFLOW_API_KEY` | [TickFlow](https://tickflow.org) API key for CN market review index enhancement; market breadth also uses TickFlow when the plan supports universe queries | Optional |
+| `IWENCAI_API_KEY` | Tonghuashun Iwencai OpenAPI key for low-priority fallback; local guard defaults to 100 calls/day | Optional |
 
 #### ✅ Minimum Configuration Example
 
@@ -253,6 +254,11 @@ Default schedule: Every weekday at **18:00 (Beijing Time)** automatic execution.
 |--------|------|--------|:----:|
 | `TUSHARE_TOKEN` | Tushare Pro Token | - | Optional |
 | `TICKFLOW_API_KEY` | TickFlow API key; CN market review indices prefer TickFlow when configured, and market breadth does so only when the plan supports universe queries | - | Optional |
+| `IWENCAI_API_KEY` | Tonghuashun Iwencai OpenAPI key. When configured, DSA uses Iwencai only as a low-priority realtime quote/search fallback; all Iwencai skills share the daily upstream quota. | - | Optional |
+| `ENABLE_IWENCAI_FALLBACK` | Enable Iwencai fallback. When unset, it is enabled automatically only if `IWENCAI_API_KEY` is configured. | auto | Optional |
+| `IWENCAI_DAILY_CALL_LIMIT` | Local daily guard for all Iwencai fallback calls. Requests are skipped after this limit. | `100` | Optional |
+| `IWENCAI_TIMEOUT_SECONDS` | Iwencai OpenAPI request timeout in seconds. | `20` | Optional |
+| `IWENCAI_USAGE_PATH` | Local JSON path for the shared daily Iwencai fallback usage counter. | `./data/iwencai_usage.json` | Optional |
 | `ENABLE_REALTIME_QUOTE` | Enable real-time quotes (if disabled, uses historical closing prices for analysis) | `true` | Optional |
 | `ENABLE_REALTIME_TECHNICAL_INDICATORS` | Intraday real-time technicals: Calculate MA5/MA10/MA20 and bull trends using real-time prices when enabled (Issue #234); uses yesterday's close if disabled. | `true` | Optional |
 | `ENABLE_CHIP_DISTRIBUTION` | Enable chip distribution analysis (this API is unstable, recommended to disable for cloud deployment). GitHub Actions users must set `ENABLE_CHIP_DISTRIBUTION=true` in Repository Variables to enable; disabled by default in workflows. | `true` | Optional |
@@ -270,6 +276,8 @@ Default schedule: Every weekday at **18:00 (Beijing Time)** automatic execution.
 > - **ETFs**: Returns available items, marks missing capabilities as `not_supported`, and does not affect the original flow overall.
 > - **US/HK stocks**: Returns `not_supported` fallback block.
 > - Any exception uses fail-open logic, only logs errors without affecting the main technical/news/chip pipeline.
+> - With `IWENCAI_API_KEY`, `iwencai` is appended to the realtime source priority as the last fallback, and Iwencai news search is appended after normal search providers fail. It does not replace daily K-line providers.
+> - The local Iwencai usage counter is stored at `IWENCAI_USAGE_PATH` (default `./data/iwencai_usage.json`) and is shared by realtime/search fallback calls.
 > - **Field contracts**:
 >   - `fundamental_context.belong_boards` = related board list for the stock (currently populated for A-shares only; `[]` when unavailable);
 >   - `fundamental_context.boards.data` = `sector_rankings` (sector rise/fall leaderboard, structure `{top, bottom}`);

@@ -123,6 +123,44 @@ class TestSensitiveFieldsUsePasswordControl(unittest.TestCase):
                          f"Sensitive fields with non-password ui_control: {violations}")
 
 
+class TestIwencaiFallbackFieldsRegistered(unittest.TestCase):
+    """Iwencai fallback config must be exposed by the settings schema."""
+
+    _IWENCAI_KEYS = (
+        "IWENCAI_API_KEY",
+        "ENABLE_IWENCAI_FALLBACK",
+        "IWENCAI_DAILY_CALL_LIMIT",
+        "IWENCAI_TIMEOUT_SECONDS",
+        "IWENCAI_BASE_URL",
+        "IWENCAI_USAGE_PATH",
+    )
+
+    def test_field_definitions_exist(self):
+        for key in self._IWENCAI_KEYS:
+            field = get_field_definition(key)
+            self.assertEqual(field["category"], "data_source", f"{key} category")
+            self.assertNotEqual(
+                field["display_order"], 9000,
+                f"{key} should be explicitly registered, not inferred",
+            )
+
+    def test_api_key_is_sensitive(self):
+        field = get_field_definition("IWENCAI_API_KEY")
+        self.assertTrue(field["is_sensitive"])
+        self.assertEqual(field["ui_control"], "password")
+
+    def test_schema_response_includes_iwencai_fields(self):
+        schema = build_schema_response()
+        data_source_cat = next(
+            (c for c in schema["categories"] if c["category"] == "data_source"),
+            None,
+        )
+        self.assertIsNotNone(data_source_cat, "data_source category missing")
+        field_keys = {f["key"] for f in data_source_cat["fields"]}
+        for key in self._IWENCAI_KEYS:
+            self.assertIn(key, field_keys, f"{key} missing from schema response")
+
+
 class TestDiscordInteractionPublicKeyField(unittest.TestCase):
     def test_field_definition_exists(self):
         field = get_field_definition("DISCORD_INTERACTIONS_PUBLIC_KEY")

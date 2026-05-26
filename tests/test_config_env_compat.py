@@ -53,6 +53,68 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_iwencai_api_key_enables_tail_realtime_fallback_by_default(
+        self, _mock_parse_litellm_yaml, _mock_setup_env
+    ):
+        with patch.dict(
+            os.environ,
+            {
+                "STOCK_LIST": "600519",
+                "IWENCAI_API_KEY": "iw-secret",
+            },
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertTrue(config.enable_iwencai_fallback)
+        self.assertEqual(config.iwencai_api_key, "iw-secret")
+        self.assertEqual(
+            config.realtime_source_priority,
+            "tencent,akshare_sina,efinance,akshare_em,iwencai",
+        )
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_iwencai_api_key_is_appended_to_explicit_realtime_priority(
+        self, _mock_parse_litellm_yaml, _mock_setup_env
+    ):
+        with patch.dict(
+            os.environ,
+            {
+                "STOCK_LIST": "600519",
+                "IWENCAI_API_KEY": "iw-secret",
+                "REALTIME_SOURCE_PRIORITY": "tencent",
+            },
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.realtime_source_priority, "tencent,iwencai")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_iwencai_fallback_can_be_explicitly_disabled(
+        self, _mock_parse_litellm_yaml, _mock_setup_env
+    ):
+        with patch.dict(
+            os.environ,
+            {
+                "STOCK_LIST": "600519",
+                "IWENCAI_API_KEY": "iw-secret",
+                "ENABLE_IWENCAI_FALLBACK": "false",
+            },
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertFalse(config.enable_iwencai_fallback)
+        self.assertEqual(
+            config.realtime_source_priority,
+            "tencent,akshare_sina,efinance,akshare_em",
+        )
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_schedule_run_immediately_falls_back_to_legacy_run_immediately(
         self,
         _mock_parse_yaml,

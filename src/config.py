@@ -593,6 +593,12 @@ class Config:
     # === 数据源 API Token ===
     tushare_token: Optional[str] = None
     tickflow_api_key: Optional[str] = None
+    iwencai_api_key: Optional[str] = None
+    iwencai_base_url: str = "https://openapi.iwencai.com"
+    enable_iwencai_fallback: bool = False
+    iwencai_daily_call_limit: int = 100
+    iwencai_timeout_seconds: float = 20.0
+    iwencai_usage_path: str = "./data/iwencai_usage.json"
     longbridge_app_key: Optional[str] = None
     longbridge_app_secret: Optional[str] = None
     longbridge_access_token: Optional[str] = None
@@ -1279,6 +1285,28 @@ class Config:
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
             tushare_token=os.getenv('TUSHARE_TOKEN'),
             tickflow_api_key=os.getenv('TICKFLOW_API_KEY'),
+            iwencai_api_key=os.getenv('IWENCAI_API_KEY') or None,
+            iwencai_base_url=(
+                os.getenv('IWENCAI_BASE_URL')
+                or 'https://openapi.iwencai.com'
+            ).rstrip('/'),
+            enable_iwencai_fallback=parse_env_bool(
+                os.getenv('ENABLE_IWENCAI_FALLBACK'),
+                default=bool((os.getenv('IWENCAI_API_KEY') or '').strip()),
+            ),
+            iwencai_daily_call_limit=parse_env_int(
+                os.getenv('IWENCAI_DAILY_CALL_LIMIT'),
+                100,
+                field_name='IWENCAI_DAILY_CALL_LIMIT',
+                minimum=0,
+            ),
+            iwencai_timeout_seconds=parse_env_float(
+                os.getenv('IWENCAI_TIMEOUT_SECONDS'),
+                20.0,
+                field_name='IWENCAI_TIMEOUT_SECONDS',
+                minimum=0.1,
+            ),
+            iwencai_usage_path=os.getenv('IWENCAI_USAGE_PATH', './data/iwencai_usage.json'),
             longbridge_app_key=os.getenv('LONGBRIDGE_APP_KEY') or None,
             longbridge_app_secret=os.getenv('LONGBRIDGE_APP_SECRET') or None,
             longbridge_access_token=os.getenv('LONGBRIDGE_ACCESS_TOKEN') or None,
@@ -2037,32 +2065,46 @@ class Config:
     @classmethod
     def _resolve_realtime_source_priority(cls) -> str:
         """
-        Resolve realtime source priority with automatic tushare injection.
+        Resolve realtime source priority with automatic tushare/iwencai injection.
 
         When TUSHARE_TOKEN is configured but REALTIME_SOURCE_PRIORITY is not
         explicitly set, automatically prepend 'tushare' to the default priority
         so that the paid data source is utilized for realtime quotes as well.
+
+        When IWENCAI_API_KEY is configured and ENABLE_IWENCAI_FALLBACK is not
+        false, append 'iwencai' as a tail fallback even for explicit priorities.
+        This keeps the small shared Iwencai quota out of the hot path.
         """
         explicit = os.getenv('REALTIME_SOURCE_PRIORITY')
         default_priority = 'tencent,akshare_sina,efinance,akshare_em'
 
         if explicit:
             # User explicitly set priority, respect it
-            return explicit
+            resolved = explicit
+        else:
+            tushare_token = os.getenv('TUSHARE_TOKEN', '').strip()
+            if tushare_token:
+                # Token configured but no explicit priority override
+                # Prepend tushare so the paid source is tried first
+                import logging
+                logger = logging.getLogger(__name__)
+                resolved = f'tushare,{default_priority}'
+                logger.info(
+                    f"TUSHARE_TOKEN detected, auto-injecting tushare into realtime priority: {resolved}"
+                )
+            else:
+                resolved = default_priority
 
-        tushare_token = os.getenv('TUSHARE_TOKEN', '').strip()
-        if tushare_token:
-            # Token configured but no explicit priority override
-            # Prepend tushare so the paid source is tried first
-            import logging
-            logger = logging.getLogger(__name__)
-            resolved = f'tushare,{default_priority}'
-            logger.info(
-                f"TUSHARE_TOKEN detected, auto-injecting tushare into realtime priority: {resolved}"
-            )
-            return resolved
+        iwencai_enabled = parse_env_bool(
+            os.getenv('ENABLE_IWENCAI_FALLBACK'),
+            default=bool(os.getenv('IWENCAI_API_KEY', '').strip()),
+        )
+        if iwencai_enabled and os.getenv('IWENCAI_API_KEY', '').strip():
+            priority_items = [item.strip().lower() for item in resolved.split(',') if item.strip()]
+            if 'iwencai' not in priority_items:
+                resolved = f"{resolved},iwencai"
 
-        return default_priority
+        return resolved
 
     @classmethod
     def reset_instance(cls) -> None:
@@ -2085,6 +2127,7 @@ class Config:
             or self.brave_api_keys
             or self.serpapi_keys
             or self.has_searxng_enabled()
+            or (self.enable_iwencai_fallback and bool(self.iwencai_api_key))
         )
 
     def is_agent_available(self) -> bool:
@@ -2205,6 +2248,21 @@ class Config:
                 severity="info",
                 message="未配置 Tushare Token，将使用其他数据源",
                 field="TUSHARE_TOKEN",
+            ))
+        if self.enable_iwencai_fallback and not self.iwencai_api_key:
+            issues.append(ConfigIssue(
+                severity="warning",
+                message="已启用同花顺问财兜底但未配置 IWENCAI_API_KEY，问财数据源不会被调用",
+                field="IWENCAI_API_KEY",
+            ))
+        elif self.enable_iwencai_fallback and self.iwencai_api_key:
+            issues.append(ConfigIssue(
+                severity="info",
+                message=(
+                    "同花顺问财兜底已启用，仅在其他实时行情/搜索数据源失败后使用，"
+                    f"本地每日调用上限为 {self.iwencai_daily_call_limit} 次"
+                ),
+                field="ENABLE_IWENCAI_FALLBACK",
             ))
 
         # --- LLM availability ---

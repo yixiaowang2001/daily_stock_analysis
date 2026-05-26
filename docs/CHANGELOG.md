@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [新功能] 新增同花顺问财 OpenAPI 低优先级兜底：配置 `IWENCAI_API_KEY` 后，实时行情与新闻搜索在常规数据源失败时才尝试问财，并通过本地每日调用计数保护 100 次/天共享额度。
+- [改进] 问财兜底的本地调用计数改为同 usage 路径共享锁，避免实时行情与新闻兜底实例并发写入时覆盖共享配额计数。
+- [测试] 新增问财 fallback 回归测试，覆盖实时行情尾部追加、显式关闭、共享配额、行情解析、搜索 provider 顺序与 manager 兜底顺序。
+- [chore] 新增仓库级 `dsa-watchlist-daily-review` skill，用于收盘后关注列表自动化复盘，复用 DSA 事实采集与 A 股分钟证据，按短线/中线/长线输出排序、建仓、目标和止损区间。
 - [改进] `dsa-stock-analysis` skill 支持从任意工作目录采集股票事实、逐票分析小批量非策略股票，并通过 `agent_note` 将短中长线观点、支撑/压力/跌破位和数据截点保存到分析历史。
 - [新功能] 尾盘战术台「策略与案例」合并原策略版本与案例库；策略版本 / 实验支持表格内查看（`ModalDialog` 悬浮窗）与删除；新增 `DELETE /api/v1/tail-tactics/strategy-versions/{id}`（有实验引用时 409）。
 - [新功能] 尾盘战术台新增候选池事实包：`GET /api/v1/tail-tactics/experiments/{id}/candidate-facts` 返回 DB-first 的 T 日日线、衍生特征、T+1 早盘指标缺口与数据新鲜度，评分 compose 自动注入该证据层供 Agent 独立判断。

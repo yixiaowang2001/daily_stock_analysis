@@ -24,12 +24,15 @@ REQUIRED_SKILL_FILES = {
     "README.md",
     "analyze-issue/SKILL.md",
     "analyze-pr/SKILL.md",
+    "dsa-watchlist-daily-review/SKILL.md",
     "dsa-stock-analysis/SKILL.md",
     "fix-issue/SKILL.md",
     "tail-picking-agent/SKILL.md",
 }
 
 REQUIRED_SKILL_SUPPORT_FILES = {
+    "dsa-watchlist-daily-review/agents/openai.yaml",
+    "dsa-watchlist-daily-review/scripts/collect_watchlist_context.py",
     "dsa-stock-analysis/agents/openai.yaml",
     "dsa-stock-analysis/scripts/collect_stock_context.py",
     "dsa-stock-analysis/scripts/save_stock_analysis_note.py",

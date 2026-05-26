@@ -115,6 +115,12 @@ class StockAnalysisPipeline:
                 searxng_public_instances_enabled=self.config.searxng_public_instances_enabled,
                 news_max_age_days=self.config.news_max_age_days,
                 news_strategy_profile=getattr(self.config, "news_strategy_profile", "short"),
+                iwencai_api_key=getattr(self.config, "iwencai_api_key", None),
+                enable_iwencai_fallback=getattr(self.config, "enable_iwencai_fallback", False),
+                iwencai_base_url=getattr(self.config, "iwencai_base_url", "https://openapi.iwencai.com"),
+                iwencai_daily_call_limit=getattr(self.config, "iwencai_daily_call_limit", 100),
+                iwencai_timeout_seconds=getattr(self.config, "iwencai_timeout_seconds", 20.0),
+                iwencai_usage_path=getattr(self.config, "iwencai_usage_path", "./data/iwencai_usage.json"),
             )
         except Exception as exc:
             logger.warning("搜索服务初始化失败，将以无搜索模式运行: %s", exc, exc_info=True)

@@ -102,6 +102,7 @@ class RealtimeSource(Enum):
     SINA = "sina"                   # 新浪直连
     STOOQ = "stooq"                 # Stooq 美股兜底
     LONGBRIDGE = "longbridge"       # 长桥（美股/港股兜底）
+    IWENCAI = "iwencai"             # 同花顺问财 OpenAPI（低优先级兜底）
     FALLBACK = "fallback"           # 降级兜底
 
 

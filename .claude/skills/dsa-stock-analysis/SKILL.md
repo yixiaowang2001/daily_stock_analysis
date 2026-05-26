@@ -88,6 +88,8 @@ The collector reuses DSA modules:
 - `src.storage` for local daily bars and latest saved DSA reports.
 - `SearchService` for optional news when search providers are configured.
 
+If `IWENCAI_API_KEY` is configured, DSA appends Iwencai as the last realtime quote/search fallback. Treat any `quote.source == "iwencai"` or `news.provider == "Iwencai"` as quota-limited fallback evidence from 同花顺问财, not as the primary data source. Do not hide the fallback source in the answer; mention it in `未验证` or the data source/cutoff line when it appears. Iwencai does not replace daily K-line data, so a missing `daily` block remains a data gap.
+
 After collection, analyze the returned JSON yourself. Use DSA's `trend.buy_signal`, `signal_score`, chip structure, valuation/earnings blocks, capital flow, and recent bars as evidence, not as final orders.
 
 For recall-only questions, use a shorter collection that emphasizes saved notes:

@@ -130,6 +130,7 @@ daily_stock_analysis/
 | `SEARXNG_BASE_URLS` | SearXNG 自建实例（无配额兜底，需在 settings.yml 启用 format: json）；留空时默认自动发现公共实例 | 可选 |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否在 `SEARXNG_BASE_URLS` 为空时自动从 `searx.space` 获取公共实例（默认 `true`） | 可选 |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/weborder/#/login?reg=834638 ) Token | 可选 |
+| `IWENCAI_API_KEY` | 同花顺问财 SkillHub / OpenAPI Key；配置后作为低优先级兜底，默认本地限制 100 次/天 | 可选 |
 | `LONGBRIDGE_APP_KEY` | [Longbridge OpenAPI](https://open.longbridge.com/) App Key（美股/港股量比、换手率、PE 兜底） | 可选 |
 | `LONGBRIDGE_APP_SECRET` | Longbridge App Secret | 可选 |
 | `LONGBRIDGE_ACCESS_TOKEN` | Longbridge Access Token | 可选 |
@@ -283,6 +284,11 @@ daily_stock_analysis/
 |--------|------|--------|:----:|
 | `TUSHARE_TOKEN` | Tushare Pro Token | - | 可选 |
 | `TICKFLOW_API_KEY` | TickFlow API Key；配置后 A 股大盘复盘指数优先尝试 TickFlow，若套餐支持标的池查询则市场统计也会优先尝试 TickFlow | - | 可选 |
+| `IWENCAI_API_KEY` | 同花顺问财 OpenAPI Key；配置后默认作为低优先级实时行情/搜索兜底，所有问财 skill 共享每日调用上限 | - | 可选 |
+| `ENABLE_IWENCAI_FALLBACK` | 是否启用问财兜底；未显式设置时，配置 `IWENCAI_API_KEY` 会自动启用 | 自动 | 可选 |
+| `IWENCAI_DAILY_CALL_LIMIT` | 本地每日调用保护上限，超过后跳过问财兜底，避免耗尽上游 100 次/天额度 | `100` | 可选 |
+| `IWENCAI_TIMEOUT_SECONDS` | 问财 OpenAPI 请求超时秒数 | `20` | 可选 |
+| `IWENCAI_USAGE_PATH` | 问财兜底本地每日调用计数文件路径，实时行情与搜索共用 | `./data/iwencai_usage.json` | 可选 |
 | `LONGBRIDGE_APP_KEY` | [Longbridge OpenAPI](https://open.longbridge.com/) App Key；配置后美股/港股的量比、换手率、PE 等 YFinance 缺失字段会自动从长桥补充 | - | 可选 |
 | `LONGBRIDGE_APP_SECRET` | Longbridge App Secret | - | 可选 |
 | `LONGBRIDGE_ACCESS_TOKEN` | Longbridge Access Token | - | 可选 |
@@ -305,6 +311,8 @@ daily_stock_analysis/
 > - 美股/港股：返回 `not_supported` 兜底块；
 > - 任何异常走 fail-open，仅记录错误，不影响技术面/新闻/筹码主链路。
 > - 配置 `TICKFLOW_API_KEY` 后，仅 A 股大盘复盘会额外优先尝试 TickFlow 的主要指数行情；若当前套餐支持标的池查询，市场涨跌统计也会优先尝试 TickFlow。个股链路和实时行情优先级不变。
+> - 配置 `IWENCAI_API_KEY` 后，系统会把 `iwencai` 追加到 `REALTIME_SOURCE_PRIORITY` 末尾，并在常规搜索 provider 失败时追加问财资讯兜底；它不会作为主数据源，也不会替代日线 K 线数据源。
+> - 问财兜底的本地调用计数写入 `IWENCAI_USAGE_PATH`（默认 `./data/iwencai_usage.json`），所有问财实时/搜索 fallback 共用 `IWENCAI_DAILY_CALL_LIMIT`。
 > - TickFlow 能力按套餐权限分层：有限权限套餐仍可使用主指数查询；支持 `CN_Equity_A` 标的池查询的套餐才会启用 TickFlow 市场统计。
 > - 官方 quickstart 已文档化 `quotes.get(universes=["CN_Equity_A"])`，但线上 smoke test 进一步确认：`TICKFLOW_API_KEY` 不等于一定具备该权限，且 `quotes.get(symbols=[...])` 单次存在标的数量限制。
 > - TickFlow 实际返回的 `change_pct` / `amplitude` 为比例值；系统已在接入层统一转换为百分比值，确保与现有数据源字段语义一致。

@@ -94,6 +94,13 @@ class MarketCommand(BotCommand):
                     searxng_base_urls=config.searxng_base_urls,
                     searxng_public_instances_enabled=config.searxng_public_instances_enabled,
                     news_max_age_days=config.news_max_age_days,
+                    news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+                    iwencai_api_key=getattr(config, "iwencai_api_key", None),
+                    enable_iwencai_fallback=getattr(config, "enable_iwencai_fallback", False),
+                    iwencai_base_url=getattr(config, "iwencai_base_url", "https://openapi.iwencai.com"),
+                    iwencai_daily_call_limit=getattr(config, "iwencai_daily_call_limit", 100),
+                    iwencai_timeout_seconds=getattr(config, "iwencai_timeout_seconds", 20.0),
+                    iwencai_usage_path=getattr(config, "iwencai_usage_path", "./data/iwencai_usage.json"),
                 )
 
             # 初始化 AI 分析器

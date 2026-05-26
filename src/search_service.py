@@ -38,6 +38,7 @@ from src.config import (
     normalize_news_strategy_profile,
     resolve_news_window_days,
 )
+from src.services.iwencai_client import IwencaiAPIError, IwencaiClient, IwencaiQuotaExceeded, iter_response_items
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,104 @@ class BaseSearchProvider(ABC):
             SearchResponse 对象
         """
         return self._execute_search(query, max_results=max_results, days=days)
+
+
+class IwencaiSearchProvider(BaseSearchProvider):
+    """Low-priority Iwencai finance news fallback."""
+
+    def __init__(
+        self,
+        api_key: Optional[str],
+        *,
+        base_url: str = "https://openapi.iwencai.com",
+        daily_limit: int = 100,
+        timeout_seconds: float = 20.0,
+        usage_path: str = "./data/iwencai_usage.json",
+    ):
+        super().__init__([api_key] if api_key else [], "Iwencai")
+        self._client = IwencaiClient(
+            api_key=api_key,
+            base_url=base_url,
+            daily_limit=daily_limit,
+            timeout_seconds=timeout_seconds,
+            usage_path=usage_path,
+        )
+
+    @property
+    def is_available(self) -> bool:
+        return self._client.is_available
+
+    @staticmethod
+    def _first_text(item: Dict[str, Any], keys: Tuple[str, ...]) -> str:
+        for key in keys:
+            value = item.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+
+    @classmethod
+    def _to_result(cls, item: Dict[str, Any]) -> Optional[SearchResult]:
+        title = cls._first_text(item, ("title", "标题", "name"))
+        snippet = cls._first_text(item, ("summary", "摘要", "snippet", "content", "内容"))
+        url = cls._first_text(item, ("url", "link", "链接", "原文链接"))
+        source = cls._first_text(item, ("source", "来源", "media", "site", "网站")) or "同花顺问财"
+        published_date = cls._first_text(item, ("publish_date", "published_date", "date", "发布时间", "发布日期"))
+        if not title and not snippet:
+            return None
+        return SearchResult(
+            title=title or snippet[:80],
+            snippet=snippet or title,
+            url=url or "https://www.iwencai.com/skillhub",
+            source=source,
+            published_date=published_date or None,
+        )
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        try:
+            raw = self._client.comprehensive_search(
+                skill_id="news-search",
+                channels=["news"],
+                query=query,
+            )
+        except IwencaiQuotaExceeded as exc:
+            logger.info("[Iwencai] daily quota exhausted, skip news fallback: %s", exc)
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=str(exc),
+            )
+        except IwencaiAPIError as exc:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=str(exc),
+            )
+
+        results: List[SearchResult] = []
+        seen = set()
+        for item in iter_response_items(raw):
+            result = self._to_result(item)
+            if result is None:
+                continue
+            dedupe_key = result.url or result.title
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            results.append(result)
+            if len(results) >= max_results:
+                break
+
+        return SearchResponse(
+            query=query,
+            results=results,
+            provider=self.name,
+            success=bool(results),
+            error_message=None if results else "Iwencai returned no parseable news results",
+        )
 
 
 class TavilySearchProvider(BaseSearchProvider):
@@ -2129,6 +2228,12 @@ class SearchService:
         searxng_public_instances_enabled: bool = True,
         news_max_age_days: int = 3,
         news_strategy_profile: str = "short",
+        iwencai_api_key: Optional[str] = None,
+        enable_iwencai_fallback: bool = False,
+        iwencai_base_url: str = "https://openapi.iwencai.com",
+        iwencai_daily_call_limit: int = 100,
+        iwencai_timeout_seconds: float = 20.0,
+        iwencai_usage_path: str = "./data/iwencai_usage.json",
     ):
         """
         初始化搜索服务
@@ -2144,6 +2249,8 @@ class SearchService:
             searxng_public_instances_enabled: 未配置自建实例时，是否自动使用公共 SearXNG 实例
             news_max_age_days: 新闻最大时效（天）
             news_strategy_profile: 新闻窗口策略档位（ultra_short/short/medium/long）
+            iwencai_api_key: 同花顺问财 API Key，作为低优先级资讯兜底
+            enable_iwencai_fallback: 是否启用问财兜底
         """
         self._providers: List[BaseSearchProvider] = []
         self.news_max_age_days = max(1, news_max_age_days)
@@ -2205,6 +2312,19 @@ class SearchService:
         if anspire_keys:
             self._providers.insert(0, AnspireSearchProvider(anspire_keys))
             logger.info(f"已配置 Anspire Search 搜索，共 {len(anspire_keys)} 个 API Key")
+
+        # 8. Iwencai（配额小，永远作为尾部兜底）
+        if enable_iwencai_fallback and iwencai_api_key:
+            self._providers.append(
+                IwencaiSearchProvider(
+                    iwencai_api_key,
+                    base_url=iwencai_base_url,
+                    daily_limit=iwencai_daily_call_limit,
+                    timeout_seconds=iwencai_timeout_seconds,
+                    usage_path=iwencai_usage_path,
+                )
+            )
+            logger.info("已配置同花顺问财搜索兜底（低优先级，每日本地上限 %s 次）", iwencai_daily_call_limit)
             
         if not self._providers:
             logger.warning("未配置任何搜索能力，新闻搜索功能将不可用")
@@ -3446,6 +3566,12 @@ def get_search_service() -> SearchService:
                     searxng_public_instances_enabled=config.searxng_public_instances_enabled,
                     news_max_age_days=config.news_max_age_days,
                     news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+                    iwencai_api_key=getattr(config, "iwencai_api_key", None),
+                    enable_iwencai_fallback=getattr(config, "enable_iwencai_fallback", False),
+                    iwencai_base_url=getattr(config, "iwencai_base_url", "https://openapi.iwencai.com"),
+                    iwencai_daily_call_limit=getattr(config, "iwencai_daily_call_limit", 100),
+                    iwencai_timeout_seconds=getattr(config, "iwencai_timeout_seconds", 20.0),
+                    iwencai_usage_path=getattr(config, "iwencai_usage_path", "./data/iwencai_usage.json"),
                 )
     
     return _search_service
