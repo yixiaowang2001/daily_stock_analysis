@@ -19,4 +19,8 @@
 | `dsa-watchlist-daily-review` | 收盘后对用户关注列表拉取 DSA 事实与分钟证据，按短线/中线/长线分别排序并输出建仓、目标、止损区间 |
 | `tail-picking-agent` | 尾盘选股兼容入口，实际映射到 `dsa-candidate-lab` 的尾盘 profile |
 
+## 相关但不是 skill 的自动化
+
+「操盘」三操盘手纸面交易实验由 Codex Desktop recurring automation 驱动，不放在 `.claude/skills/` 下。仓库内代码入口是 `scripts/run_agent_backtest_cycle.py`，自动化安装入口是 `scripts/install_agent_backtest_codex_automations.py`，Web 独立页面是 `/agent-backtest`。详细边界见 `docs/agent-skill-integration.md` 与 `docs/agent-backtest-workbench.md`。
+
 如果未来需要兼容其他 agent 目录（如 `.agents/skills/` 或 `.github/skills/`），应先明确单一真源，再通过脚本或镜像同步，而不是手工长期维护多份同义内容。

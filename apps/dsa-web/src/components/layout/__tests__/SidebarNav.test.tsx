@@ -62,6 +62,16 @@ describe('SidebarNav', () => {
     expect(screen.getByRole('button', { name: '切换主题(折叠)' })).toBeInTheDocument();
   });
 
+  it('does not include the standalone trading page in the DSA sidebar', () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <SidebarNav />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole('link', { name: '操盘' })).not.toBeInTheDocument();
+  });
+
   it('opens the logout confirmation and confirms logout', async () => {
     render(
       <MemoryRouter initialEntries={['/chat']}>

@@ -146,7 +146,9 @@ async def get_strategies():
     )
 
 
-def _tail_ranking_header_enabled(http_request: Request) -> bool:
+def _tail_ranking_header_enabled(http_request: Optional[Request]) -> bool:
+    if http_request is None:
+        return False
     v = (http_request.headers.get("x-dsa-tail-ranking") or "").strip().lower()
     return v in ("1", "true", "yes")
 
@@ -178,7 +180,7 @@ def _maybe_persist_tail_archive(
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def agent_chat(request: ChatRequest, http_request: Request):
+async def agent_chat(request: ChatRequest, http_request: Request = None):
     """
     Chat with the AI Agent.
     """
@@ -415,7 +417,7 @@ async def agent_research(request: ResearchRequest):
 
 
 @router.post("/chat/stream")
-async def agent_chat_stream(request: ChatRequest, http_request: Request):
+async def agent_chat_stream(request: ChatRequest, http_request: Request = None):
     """
     Chat with the AI Agent, streaming progress via SSE.
     Each SSE event is a JSON object with a 'type' field:

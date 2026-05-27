@@ -11,7 +11,19 @@ API v1 路由聚合
 
 from fastapi import APIRouter
 
-from api.v1.endpoints import analysis, auth, history, stocks, backtest, system_config, agent, usage, portfolio, tail_tactics
+from api.v1.endpoints import (
+    agent,
+    agent_backtest,
+    analysis,
+    auth,
+    backtest,
+    history,
+    portfolio,
+    stocks,
+    system_config,
+    tail_tactics,
+    usage,
+)
 
 # 创建 v1 版本主路由
 router = APIRouter(prefix="/api/v1")
@@ -50,6 +62,12 @@ router.include_router(
     backtest.router,
     prefix="/backtest",
     tags=["Backtest"]
+)
+
+router.include_router(
+    agent_backtest.router,
+    prefix="/agent-backtest",
+    tags=["AgentBacktest"],
 )
 
 router.include_router(

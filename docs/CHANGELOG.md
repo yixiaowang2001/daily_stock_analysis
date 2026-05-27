@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [新功能] 新增 Agent 回测实验 API：支持为 A 股关注列表创建短线/中线/长线三个隔离操盘手账户，记录观察、决策、订单、成交、策略版本演进与每日净值，并在成交落账时执行 100 股整数手、T+1 卖出和买入现金校验。
+- [新功能] 新增 Codex 专用 Agent 回测 runner：`scripts/run_agent_backtest_cycle.py` 可创建实验、生成短/中/长隔离决策上下文、写回 Codex 决策、记录订单成交并生成每日净值快照。
+- [新功能] 新增 Codex 自动化操盘任务，按 09:40、13:30、14:40 触发三操盘手隔离复盘，并在 16:05 记录收盘净值；保留本地 Codex CLI 定时脚本作为备用方案。
+- [新功能] 新增 `scripts/install_agent_backtest_codex_automations.py`，clone 后可把“操盘”早盘、午盘、尾盘和收盘净值任务注册到当前用户的 Codex Desktop 自动化配置。
+- [新功能] Web 端新增独立“操盘”页面 `/agent-backtest`，支持浅色/深色模式，用每日 16:00 后净值快照展示三操盘手收益曲线、当前权益、策略版本、最新决策和事件流。
+- [文档] 新增 Agent 回测实验台说明，并在完整指南中补充 `/api/v1/agent-backtest` 接口入口与示例。
+- [文档] 完善 DSA Agent Skill 接入说明，明确 `dsa-stock-analysis`、`dsa-watchlist-daily-review`、`dsa-candidate-lab`、`tail-picking-agent` 与“操盘”Codex 自动化的边界。
+- [测试] 新增 Agent 回测服务与 runner 单元测试，覆盖隔离账户创建、上下文隔离、每日观察次数限制、A 股整数手/T+1 约束、策略版本演进和决策写回。
+- [修复] Agent chat API 允许测试和内部调用不传 FastAPI `Request` 对象时回退到普通聊天路径，避免直接调用 endpoint 函数触发参数缺失错误。
 - [新功能] 新增同花顺问财 OpenAPI 低优先级兜底：配置 `IWENCAI_API_KEY` 后，实时行情与新闻搜索在常规数据源失败时才尝试问财，并通过本地每日调用计数保护 100 次/天共享额度。
 - [改进] 问财兜底的本地调用计数改为同 usage 路径共享锁，避免实时行情与新闻兜底实例并发写入时覆盖共享配额计数。
 - [测试] 新增问财 fallback 回归测试，覆盖实时行情尾部追加、显式关闭、共享配额、行情解析、搜索 provider 顺序与 manager 兜底顺序。

@@ -11,8 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-
-DEFAULT_DSA_REPO_ROOT = Path("/Users/wangyixiao/Desktop/Files/Projects/daily_stock_analysis")
 SCHEMA_VERSION = "dsa_stock_analysis_note.v1"
 
 
@@ -35,8 +33,6 @@ def _find_repo_root() -> Path:
         candidates.extend([cwd, *cwd.parents])
     except Exception:
         pass
-
-    candidates.append(DEFAULT_DSA_REPO_ROOT)
 
     seen = set()
     for candidate in candidates:

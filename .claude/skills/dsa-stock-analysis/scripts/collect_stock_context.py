@@ -14,10 +14,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-
-DEFAULT_DSA_REPO_ROOT = Path("/Users/wangyixiao/Desktop/Files/Projects/daily_stock_analysis")
-
-
 def _is_repo_root(path: Path) -> bool:
     return (path / "main.py").exists() and (path / "AGENTS.md").exists()
 
@@ -37,8 +33,6 @@ def _find_repo_root() -> Path:
         candidates.extend([cwd, *cwd.parents])
     except Exception:
         pass
-
-    candidates.append(DEFAULT_DSA_REPO_ROOT)
 
     seen = set()
     for candidate in candidates:

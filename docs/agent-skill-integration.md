@@ -12,6 +12,7 @@
 | `dsa-watchlist-daily-review` | 仓库级 skill，可软链接为用户级 / 全局 skill | 收盘后关注列表复盘、每日定时自动化、10-20 只股票按短线/中线/长线分别排序，并输出建仓、目标、止损区间 | 复用 `dsa-stock-analysis` 的事实采集与笔记保存脚本，并补充 A 股 1 分钟证据；Agent 负责横向排序、价位框架、风险扣分与自动化交付 |
 | `dsa-candidate-lab` | 用户级 / 全局 skill | 多候选池评分、策略实验、版本对比、复盘学习；包含尾盘、未来日/周动量等 profile | 以本仓库的尾盘战术台 API、存储、Web 页面和候选事实包作为当前主要落地面 |
 | `tail-picking-agent` | 仓库级兼容 skill | 用户明确提到尾盘选股智能体、尾盘实验、14:40 评分、T+1 复盘 | 兼容入口；新逻辑应映射到 `dsa-candidate-lab` 的 `tail-session-t1` profile |
+| Agent 回测操盘自动化 | Codex Desktop recurring automation，不是 skill | 三个隔离操盘手在 09:40、13:30、14:40 看盘决策，并在 16:05 记录收盘净值 | 由本仓库的 `agent-backtest` API、Web 独立页 `/agent-backtest`、`scripts/run_agent_backtest_cycle.py` 和 `scripts/install_agent_backtest_codex_automations.py` 承载；Codex 是决策者，repo 内只保存上下文、决策、订单、成交和净值 |
 | `daily-stock-analysis` / openclaw Skill | 外部集成 skill | openclaw 或其他外部 Agent 通过 HTTP 调用 DSA REST API | 依赖已运行的 DSA API 服务，不是仓库协作规则真源 |
 | 根目录 `SKILL.md` | 产品 / 外部集成说明 | 通过 Python 入口理解 DSA 的股票分析能力 | 不是仓库 AI 协作治理真源；治理规则看 `AGENTS.md` |
 
@@ -52,6 +53,8 @@
 ```
 
 用户显式说 `tail-picking-agent` 或“尾盘选股智能体”时，走 `tail-picking-agent` 兼容入口，但实际工作流按 `dsa-candidate-lab` 的 `tail-session-t1` profile 执行。
+
+用户要比较“短线 / 中线 / 长线三个操盘手”的纸面交易收益、希望操盘手每天只看两三次盘并自主买卖时，用 Agent 回测操盘自动化。它不是仓库 skill，也不是 repo 内置 Agent：Codex Desktop automation 会定时唤起 Codex，由 Codex 读取每个 profile 的隔离上下文并写回结构化决策。页面入口是 `/agent-backtest`，安装和运行细节见 `docs/agent-backtest-workbench.md`。
 
 外部 Agent 只想通过部署好的 DSA 服务触发分析时，用 openclaw / HTTP Skill，参考 `docs/openclaw-skill-integration.md`。
 
@@ -145,6 +148,22 @@ http://localhost:8000
 
 详见 `docs/openclaw-skill-integration.md`。
 
+### 4. Agent 回测操盘自动化
+
+操盘自动化使用 Codex Desktop recurring automation，不通过 `.claude/skills/` 注册。clone 到新电脑后，先创建回测实验，再安装自动化：
+
+```bash
+python scripts/run_agent_backtest_cycle.py prepare \
+  --name "A股三周期纸面交易实验" \
+  --symbols "002975,002222,603083,603267,002156,600481,002463,603660,000636,603678,603601,603881,002371" \
+  --initial-cash-per-agent 20000 \
+  --max-observations-per-day 3
+
+python scripts/install_agent_backtest_codex_automations.py --run-id <prepare 输出的 run.id>
+```
+
+自动化会注册四个本地任务：早盘、午盘、尾盘和收盘净值。前三个任务生成 `short` / `medium` / `long` 三份隔离上下文，Codex 分别读取并调用 `apply-decision`；收盘任务只写入 `daily-nav`。如果 Codex 自动化页面没有立即显示，重启 Codex Desktop。
+
 ## 关键边界
 
 - `dsa-stock-analysis` 不负责候选池排名、策略版本、尾盘实验或复盘持久化。
@@ -152,6 +171,7 @@ http://localhost:8000
 - `dsa-watchlist-daily-review` 负责用户已有关注列表的日终横向排序，不负责生成候选池筛选策略、尾盘 T+1 预测实验或策略复盘学习。
 - `dsa-candidate-lab` 可以复用单票事实包，但候选池评分、排名、输出契约与复盘学习由它负责。
 - `tail-picking-agent` 只保留兼容入口；新增跨策略逻辑不要继续塞进这个 alias。
+- Agent 回测操盘自动化不负责生成关注列表，也不复用其他 profile 的决策；每个操盘手只能读取自己的 `*_context.md`，按 A 股交易约束写回观察、决策、订单、成交和净值。
 - `.agents/skills/` 如需存在，应视为 `.claude/skills/` 的本地镜像或适配目录，不作为手工维护的第二真源。
 - 所有 skill 输出都属于研究和风险框架，不是投资指令或自动交易建议。
 
@@ -166,6 +186,7 @@ python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py .claude/s
 python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py .claude/skills/tail-picking-agent
 python -m py_compile .claude/skills/dsa-watchlist-daily-review/scripts/collect_watchlist_context.py
 python -m py_compile .claude/skills/dsa-stock-analysis/scripts/collect_stock_context.py .claude/skills/dsa-stock-analysis/scripts/save_stock_analysis_note.py
+python -m py_compile scripts/install_agent_backtest_codex_automations.py scripts/run_agent_backtest_cycle.py
 ```
 
 如修改 `dsa-stock-analysis` 的采集脚本，再补充：

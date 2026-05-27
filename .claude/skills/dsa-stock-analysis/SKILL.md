@@ -13,13 +13,7 @@ Keep this skill narrow. It is the per-symbol fact, judgment, and time-aware note
 
 ## Repository And Discovery
 
-Default DSA repository path:
-
-```text
-/Users/wangyixiao/Desktop/Files/Projects/daily_stock_analysis
-```
-
-This skill is available globally through `~/.codex/skills/dsa-stock-analysis`, which is expected to point to the repository skill folder. When the current working directory is not the DSA repository, run bundled scripts through the global path. The scripts locate the repository from `DSA_REPO_ROOT`, their own symlink target, the current directory, or the default path above, then change into the repository before loading DSA config so relative `DATABASE_PATH` still writes to the DSA database.
+This skill is available globally through `~/.codex/skills/dsa-stock-analysis`, which is expected to point to the repository skill folder. When the current working directory is not the DSA repository, run bundled scripts through the global path. The scripts locate the repository from `DSA_REPO_ROOT`, their own symlink target, or the current directory, then change into the repository before loading DSA config so relative `DATABASE_PATH` still writes to the DSA database.
 
 If the repository cannot be found, ask the user for the DSA path before collecting or persisting data.
 

@@ -2,6 +2,7 @@ import type React from 'react';
 import { useEffect } from 'react';
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import HomePage from './pages/HomePage';
+import AgentBacktestPage from './pages/AgentBacktestPage';
 import BacktestPage from './pages/BacktestPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
@@ -70,6 +71,8 @@ const AppContent: React.FC = () => {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
+      <Route path="/agent-backtest" element={<AgentBacktestPage />} />
+      <Route path="/trading" element={<Navigate to="/agent-backtest" replace />} />
       <Route path="/login" element={<LoginPage />} />
     </Routes>
   );

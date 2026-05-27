@@ -71,6 +71,10 @@ Score each horizon from `0` to `100` with explicit risk penalties. A practical d
 For prices and levels:
 
 - Give a buy/observe zone only when the support, trend, and risk-reward evidence justify it.
+- Derive horizon-specific zones instead of reusing one price band for every table:
+  - Short entry zone: nearby support, intraday close position, next-session volume confirmation, and immediate invalidation.
+  - Medium build zone: daily MA10/MA20, recent platform support, sector confirmation, and 1-4 week invalidation.
+  - Long build zone: valuation/fundamental margin of safety, quarterly trend support, and staged allocation levels; if long-term quality is high but price is extended, say `等待深回撤/无法给出当前建仓位`.
 - Give target prices as conditional resistance/target zones, not guaranteed outcomes.
 - Always include invalidation or stop-loss levels. If data is insufficient, say `无法可靠给出`.
 - For high-volatility or limit-up/limit-down names, prefer zones over single-point precision.
@@ -81,13 +85,15 @@ Answer in Chinese by default when the user writes Chinese. Put the watchlist sum
 
 - `数据截点`: generated time, trade date, latest daily date, minute cutoff, and missing-data summary.
 - `短线排序`: rank, code/name, score, action, entry zone, target zone, stop/invalidation, one-line reason.
-- `中线排序`: same columns, using medium-horizon judgment.
-- `长线排序`: same columns, using long-horizon judgment.
+- `中线排序`: same columns, using medium-horizon judgment; `entry_zone` must be the 1-4 week build/add zone, not a copied short-term buy zone.
+- `长线排序`: same columns, using long-horizon judgment; `entry_zone` must be the quarterly staged build zone or `等待深回撤/无法可靠给出`.
+- `中长线建仓计划`: for the medium/long priority and candidate names, list `code/name`, `medium_build_zone`, `long_build_zone`, `staging_plan`, `target_or_recheck_zone`, `medium_invalidation`, `long_invalidation`, and the evidence gap that could change the plan.
 - `重点观察`: 3-5 cross-watchlist watch points for the next session.
 - `逐票简表`: concise per-symbol technical/sentiment/fundamental evidence and horizon views.
 - `已保存`: per-symbol `record_id` / `query_id`, or why a note was not saved.
 - `未验证`: missing providers, stale U.S./HK data, failed minute fetches, or tests not run.
 - `风险`: data freshness, market regime, liquidity, news, earnings, and model/analysis uncertainty.
+- When the user asks for `详细情况`, or when this skill runs in an automation, expand the answer beyond the top summary: include interface health, all three ranking tables, the `中长线建仓计划`, 3-5 key watch points, concise per-symbol details, saved note ids, unverified items, and risks.
 
 Each ranking row should include:
 
@@ -163,7 +169,7 @@ For skill-only changes, run:
 
 ```bash
 python scripts/check_ai_assets.py
-python /Users/wangyixiao/.codex/skills/.system/skill-creator/scripts/quick_validate.py .claude/skills/dsa-watchlist-daily-review
+python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py .claude/skills/dsa-watchlist-daily-review
 python -m py_compile .claude/skills/dsa-watchlist-daily-review/scripts/collect_watchlist_context.py
 python .claude/skills/dsa-watchlist-daily-review/scripts/collect_watchlist_context.py --help
 ```

@@ -1023,11 +1023,15 @@ python main.py --debug
 | `stop_loss_trigger_rate` | 止损触发率（仅统计配置了止损的记录） |
 | `take_profit_trigger_rate` | 止盈触发率（仅统计配置了止盈的记录） |
 
+### Agent 回测实验台
+
+`/api/v1/agent-backtest` 是新增的多操盘手纸面交易实验 API，面向 A 股关注列表创建短线 / 中线 / 长线三个隔离 profile。它不替代上面的历史建议回测，而是记录每个操盘手在某个时间点看到的证据、决策、订单、成交和每日净值。默认约束包括 6 位 A 股代码、100 股整数手、T+1 卖出校验、买入现金校验，以及独立组合账户落账。Web 前端入口为独立页面 `/agent-backtest`（“操盘”），可用每日 16:00 后净值快照对比三操盘手收益曲线、当前权益、策略版本、最新决策和事件流。Codex 自动化可通过 `python scripts/install_agent_backtest_codex_automations.py --run-id <id>` 注册 09:40、13:30、14:40 三次复盘和 16:05 收盘净值任务。完整说明见 [Agent 回测实验台](agent-backtest-workbench.md)。
+
 ---
 
 ## 本地 WebUI 管理界面
 
-WebUI 与 FastAPI API 服务共用同一服务进程，启动后可在浏览器中完成配置管理、手动分析、任务进度查看、历史报告、回测、持仓管理和智能导入等操作。**尾盘战术台**（`/tail-tactics`）用于策略版本、实验登记与 Agent 逐票评分/复盘串联，详见 [尾盘战术台说明](tail-tactics-workbench.md)。认证、云服务器访问和 API 调用细节见下方说明。
+WebUI 与 FastAPI API 服务共用同一服务进程，启动后可在浏览器中完成配置管理、手动分析、任务进度查看、历史报告、回测、持仓管理和智能导入等操作。**尾盘战术台**（`/tail-tactics`）用于策略版本、实验登记与 Agent 逐票评分/复盘串联，详见 [尾盘战术台说明](tail-tactics-workbench.md)。**操盘**独立页面（`/agent-backtest`，`/trading` 会跳转到该页）用于查看短/中/长三个隔离操盘手的纸面交易实验，详见 [Agent 回测实验台](agent-backtest-workbench.md)。认证、云服务器访问和 API 调用细节见下方说明。
 
 ### FastAPI API 服务
 
@@ -1062,6 +1066,12 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 | `/api/v1/backtest/results` | GET | 查询回测结果（分页） |
 | `/api/v1/backtest/performance` | GET | 获取整体回测表现 |
 | `/api/v1/backtest/performance/{code}` | GET | 获取单股回测表现 |
+| `/api/v1/agent-backtest/runs` | POST / GET | 创建或查询多操盘手纸面交易实验 |
+| `/api/v1/agent-backtest/runs/{run_id}/observations` | POST | 记录一次受限看盘 |
+| `/api/v1/agent-backtest/runs/{run_id}/decisions` | POST | 记录一次操盘手决策 |
+| `/api/v1/agent-backtest/runs/{run_id}/orders` | POST | 创建模拟订单 |
+| `/api/v1/agent-backtest/runs/{run_id}/orders/{order_id}/fills` | POST | 记录成交并写入隔离组合账户 |
+| `/api/v1/agent-backtest/runs/{run_id}/daily-nav` | POST | 生成各 profile 每日净值快照 |
 | `/api/v1/stocks/extract-from-image` | POST | 从图片提取股票代码（multipart，超时 60s） |
 | `/api/v1/stocks/parse-import` | POST | 解析 CSV/Excel/剪贴板（multipart file 或 JSON `{"text":"..."}`，文件≤2MB，文本≤100KB） |
 | `/api/health` | GET | 健康检查 |
@@ -1108,6 +1118,11 @@ curl http://127.0.0.1:8000/api/v1/backtest/performance/600519
 
 # 分页查询回测结果
 curl "http://127.0.0.1:8000/api/v1/backtest/results?page=1&limit=20"
+
+# 创建短/中/长三个隔离操盘手的纸面交易实验
+curl -X POST http://127.0.0.1:8000/api/v1/agent-backtest/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"A股三周期实验","symbols":["600519","000001"],"initial_cash_per_agent":20000}'
 ```
 
 ### 自定义配置

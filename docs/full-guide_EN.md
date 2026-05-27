@@ -859,11 +859,15 @@ Backtesting triggers automatically after the daily analysis flow completes (non-
 | `stop_loss_trigger_rate` | Stop-loss trigger rate (only counts records with SL configured) |
 | `take_profit_trigger_rate` | Take-profit trigger rate (only counts records with TP configured) |
 
+### Agent Backtest Workbench
+
+`/api/v1/agent-backtest` is a new multi-operator paper-trading experiment API for A-share watchlists. It creates isolated short-term, medium-term, and long-term profiles and records what each profile could see, what it decided, when the order became effective, how it filled, and the resulting daily NAV. It does not replace the historical-advice backtest above. The MVP enforces 6-digit A-share symbols, 100-share board lots, T+1 sell availability, buy-side cash checks, and isolated portfolio ledgers. The standalone Web entry is `/agent-backtest` ("操盘") for comparing the three operators with daily post-16:00 NAV return curves, current equity, strategy version, latest decision, and event stream. Register Codex Desktop automations with `python scripts/install_agent_backtest_codex_automations.py --run-id <id>` to schedule 09:40, 13:30, 14:40 review cycles and the 16:05 close NAV task. The detailed Chinese guide is [Agent 回测实验台](agent-backtest-workbench.md).
+
 ---
 
 ## Local WebUI Management Interface
 
-The WebUI and FastAPI API share the same service process. After startup, use the browser workspace for configuration management, manual analysis, task progress, historical reports, backtesting, portfolio management, and smart import. Authentication, cloud-server access, and API usage details are covered below.
+The WebUI and FastAPI API share the same service process. After startup, use the browser workspace for configuration management, manual analysis, task progress, historical reports, backtesting, portfolio management, and smart import. The standalone "操盘" page (`/agent-backtest`; `/trading` redirects there) shows isolated short/medium/long paper-trading profiles; see [Agent 回测实验台](agent-backtest-workbench.md). Authentication, cloud-server access, and API usage details are covered below.
 
 ### FastAPI API Service
 
@@ -898,6 +902,12 @@ FastAPI provides RESTful API service for configuration management and triggering
 | `/api/v1/backtest/results` | GET | Query backtest results (paginated) |
 | `/api/v1/backtest/performance` | GET | Get overall backtest performance |
 | `/api/v1/backtest/performance/{code}` | GET | Get per-stock backtest performance |
+| `/api/v1/agent-backtest/runs` | POST / GET | Create or list multi-agent paper-trading runs |
+| `/api/v1/agent-backtest/runs/{run_id}/observations` | POST | Record one bounded market observation |
+| `/api/v1/agent-backtest/runs/{run_id}/decisions` | POST | Record one operator decision |
+| `/api/v1/agent-backtest/runs/{run_id}/orders` | POST | Create a simulated order |
+| `/api/v1/agent-backtest/runs/{run_id}/orders/{order_id}/fills` | POST | Record a fill and write it to the isolated portfolio ledger |
+| `/api/v1/agent-backtest/runs/{run_id}/daily-nav` | POST | Capture daily NAV snapshots for all profiles |
 | `/api/health` | GET | Health check |
 | `/docs` | GET | API Swagger documentation |
 
@@ -942,6 +952,11 @@ curl http://127.0.0.1:8000/api/v1/backtest/performance/600519
 
 # Paginated backtest results
 curl "http://127.0.0.1:8000/api/v1/backtest/results?page=1&limit=20"
+
+# Create an isolated short/medium/long paper-trading run
+curl -X POST http://127.0.0.1:8000/api/v1/agent-backtest/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"A-share three-horizon run","symbols":["600519","000001"],"initial_cash_per_agent":20000}'
 ```
 
 ### Custom Configuration

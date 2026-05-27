@@ -696,6 +696,288 @@ class TailCandidateFactSnapshot(Base):
     )
 
 
+class AgentBacktestRun(Base):
+    """多 Agent 纸面交易实验：一次回放/实盘观察实验的根记录。"""
+
+    __tablename__ = 'agent_backtest_runs'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    status = Column(String(32), nullable=False, default='draft', index=True)
+    market = Column(String(8), nullable=False, default='cn', index=True)
+    symbols_json = Column(Text, nullable=False)
+    start_date = Column(Date, nullable=True, index=True)
+    end_date = Column(Date, nullable=True, index=True)
+    initial_cash_per_agent = Column(Float, nullable=False, default=20000.0)
+    max_observations_per_day = Column(Integer, nullable=False, default=3)
+    rule_version = Column(String(32), nullable=False, default='cn_a_v1')
+    config_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index('ix_agent_backtest_run_status_created', 'status', 'created_at'),
+    )
+
+
+class AgentBacktestProfile(Base):
+    """实验中的一个隔离操盘手 profile。"""
+
+    __tablename__ = 'agent_backtest_profiles'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_runs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    profile_key = Column(String(24), nullable=False)
+    display_name = Column(String(64), nullable=False)
+    style_profile = Column(String(24), nullable=False)
+    policy_version_label = Column(String(64), nullable=False, default='v1.0')
+    policy_markdown = Column(Text, nullable=True)
+    context_namespace = Column(String(128), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default='active', index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint('run_id', 'profile_key', name='uix_agent_backtest_profile_run_key'),
+        Index('ix_agent_backtest_profile_run_status', 'run_id', 'status'),
+    )
+
+
+class AgentBacktestPolicyVersion(Base):
+    """操盘手策略版本；风格固定，具体打法允许向前演进。"""
+
+    __tablename__ = 'agent_backtest_policy_versions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_runs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    profile_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_profiles.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    version_label = Column(String(64), nullable=False)
+    body_markdown = Column(Text, nullable=False)
+    parent_policy_id = Column(Integer, ForeignKey('agent_backtest_policy_versions.id'), nullable=True)
+    effective_from = Column(Date, nullable=True, index=True)
+    change_reason = Column(Text, nullable=True)
+    status = Column(String(32), nullable=False, default='active', index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        UniqueConstraint('profile_id', 'version_label', name='uix_agent_backtest_policy_profile_version'),
+        Index('ix_agent_backtest_policy_profile_time', 'profile_id', 'created_at'),
+    )
+
+
+class AgentBacktestObservation(Base):
+    """一次受限看盘：记录操盘手当时能看到的证据和数据截止时间。"""
+
+    __tablename__ = 'agent_backtest_observations'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_runs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    profile_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_profiles.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    trade_date = Column(Date, nullable=False, index=True)
+    observation_time = Column(String(8), nullable=False)
+    data_cutoff_at = Column(DateTime, nullable=False, index=True)
+    sequence_no = Column(Integer, nullable=False)
+    symbols_json = Column(Text, nullable=True)
+    evidence_json = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'profile_id',
+            'trade_date',
+            'sequence_no',
+            name='uix_agent_backtest_observation_profile_date_seq',
+        ),
+        Index('ix_agent_backtest_observation_run_date', 'run_id', 'trade_date'),
+    )
+
+
+class AgentBacktestDecision(Base):
+    """操盘手基于一次观察给出的决策，订单可选地引用该决策。"""
+
+    __tablename__ = 'agent_backtest_decisions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_runs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    profile_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_profiles.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    observation_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_observations.id', ondelete='CASCADE'),
+        nullable=True,
+        index=True,
+    )
+    trade_date = Column(Date, nullable=False, index=True)
+    decision_time = Column(DateTime, nullable=False, index=True)
+    action = Column(String(24), nullable=False)
+    symbol = Column(String(16), nullable=True, index=True)
+    side = Column(String(8), nullable=True)
+    quantity = Column(Float, nullable=True)
+    order_type = Column(String(16), nullable=True)
+    limit_price = Column(Float, nullable=True)
+    confidence = Column(Float, nullable=True)
+    rationale = Column(Text, nullable=True)
+    risk_notes = Column(Text, nullable=True)
+    policy_version_label = Column(String(64), nullable=False)
+    raw_output = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_agent_backtest_decision_profile_date', 'profile_id', 'trade_date'),
+    )
+
+
+class AgentBacktestOrder(Base):
+    """从决策派生出的模拟订单；成交按 effective_at 之后的行情撮合。"""
+
+    __tablename__ = 'agent_backtest_orders'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_runs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    profile_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_profiles.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    decision_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_decisions.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    symbol = Column(String(16), nullable=False, index=True)
+    side = Column(String(8), nullable=False)
+    order_type = Column(String(16), nullable=False, default='limit')
+    requested_quantity = Column(Float, nullable=False)
+    limit_price = Column(Float, nullable=True)
+    submitted_at = Column(DateTime, nullable=False, index=True)
+    effective_at = Column(DateTime, nullable=False, index=True)
+    status = Column(String(32), nullable=False, default='pending', index=True)
+    reject_reason = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index('ix_agent_backtest_order_profile_status', 'profile_id', 'status'),
+    )
+
+
+class AgentBacktestFill(Base):
+    """模拟成交记录，同时会写入对应隔离组合账户的交易流水。"""
+
+    __tablename__ = 'agent_backtest_fills'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_runs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    profile_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_profiles.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    order_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_orders.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    portfolio_trade_id = Column(Integer, ForeignKey('portfolio_trades.id'), nullable=True, index=True)
+    symbol = Column(String(16), nullable=False, index=True)
+    side = Column(String(8), nullable=False)
+    quantity = Column(Float, nullable=False)
+    price = Column(Float, nullable=False)
+    fee = Column(Float, nullable=False, default=0.0)
+    tax = Column(Float, nullable=False, default=0.0)
+    filled_at = Column(DateTime, nullable=False, index=True)
+    source = Column(String(64), nullable=False, default='manual')
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_agent_backtest_fill_profile_time', 'profile_id', 'filled_at'),
+    )
+
+
+class AgentBacktestDailyNav(Base):
+    """操盘手每日净值快照，用于日报和资金曲线。"""
+
+    __tablename__ = 'agent_backtest_daily_nav'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_runs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    profile_id = Column(
+        Integer,
+        ForeignKey('agent_backtest_profiles.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    trade_date = Column(Date, nullable=False, index=True)
+    cash = Column(Float, nullable=False, default=0.0)
+    market_value = Column(Float, nullable=False, default=0.0)
+    total_equity = Column(Float, nullable=False, default=0.0)
+    realized_pnl = Column(Float, nullable=False, default=0.0)
+    unrealized_pnl = Column(Float, nullable=False, default=0.0)
+    payload_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint('profile_id', 'trade_date', name='uix_agent_backtest_nav_profile_date'),
+        Index('ix_agent_backtest_nav_run_date', 'run_id', 'trade_date'),
+    )
+
+
 class LLMUsage(Base):
     """One row per litellm.completion() call — token-usage audit log."""
 
