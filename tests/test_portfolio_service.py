@@ -140,6 +140,55 @@ class PortfolioServiceTestCase(unittest.TestCase):
         self.assertAlmostEqual(fifo_acc["positions"][0]["quantity"], 50.0, places=6)
         self.assertAlmostEqual(avg_acc["positions"][0]["quantity"], 50.0, places=6)
 
+    def test_snapshot_marks_stale_valuation_when_latest_close_is_prior_day(self) -> None:
+        account = self.service.create_account(name="Main", broker="Demo", market="cn", base_currency="CNY")
+        aid = account["id"]
+
+        self.service.record_cash_ledger(
+            account_id=aid,
+            event_date=date(2026, 1, 1),
+            direction="in",
+            amount=10000,
+            currency="CNY",
+        )
+        self.service.record_trade(
+            account_id=aid,
+            symbol="600519",
+            trade_date=date(2026, 1, 2),
+            side="buy",
+            quantity=100,
+            price=10,
+            fee=0,
+            tax=0,
+            market="cn",
+            currency="CNY",
+        )
+        self._save_close("600519", date(2026, 1, 1), 12.0)
+
+        snapshot = self.service.get_portfolio_snapshot(account_id=aid, as_of=date(2026, 1, 2), cost_method="fifo")
+        acc = snapshot["accounts"][0]
+        pos = acc["positions"][0]
+
+        self.assertTrue(acc["valuation_stale"])
+        self.assertTrue(pos["valuation_stale"])
+        self.assertEqual(pos["valuation_date"], "2026-01-01")
+        self.assertEqual(pos["valuation_source"], "unit-test")
+
+        refreshed = self.service.get_portfolio_snapshot(
+            account_id=aid,
+            as_of=date(2026, 1, 2),
+            cost_method="fifo",
+            price_overrides={"600519": 13.0},
+            price_override_sources={"600519": "realtime_quote:unit-test"},
+        )
+        refreshed_acc = refreshed["accounts"][0]
+        refreshed_pos = refreshed_acc["positions"][0]
+        self.assertFalse(refreshed_acc["valuation_stale"])
+        self.assertFalse(refreshed_pos["valuation_stale"])
+        self.assertEqual(refreshed_pos["valuation_date"], "2026-01-02")
+        self.assertEqual(refreshed_pos["valuation_source"], "realtime_quote:unit-test")
+        self.assertAlmostEqual(refreshed_acc["total_market_value"], 1300.0, places=6)
+
     def test_corporate_actions_dividend_and_split(self) -> None:
         account = self.service.create_account(name="Main", broker="Demo", market="cn", base_currency="CNY")
         aid = account["id"]

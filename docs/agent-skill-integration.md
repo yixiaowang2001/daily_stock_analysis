@@ -12,7 +12,8 @@
 | `dsa-watchlist-daily-review` | 仓库级 skill，可软链接为用户级 / 全局 skill | 收盘后关注列表复盘、每日定时自动化、10-20 只股票按短线/中线/长线分别排序，并输出建仓、目标、止损区间 | 复用 `dsa-stock-analysis` 的事实采集与笔记保存脚本，并补充 A 股 1 分钟证据；Agent 负责横向排序、价位框架、风险扣分与自动化交付 |
 | `dsa-candidate-lab` | 用户级 / 全局 skill | 多候选池评分、策略实验、版本对比、复盘学习；包含尾盘、未来日/周动量等 profile | 以本仓库的尾盘战术台 API、存储、Web 页面和候选事实包作为当前主要落地面 |
 | `tail-picking-agent` | 仓库级兼容 skill | 用户明确提到尾盘选股智能体、尾盘实验、14:40 评分、T+1 复盘 | 兼容入口；新逻辑应映射到 `dsa-candidate-lab` 的 `tail-session-t1` profile |
-| Agent 回测操盘自动化 | Codex Desktop recurring automation，不是 skill | 三个隔离操盘手在 09:40、13:30、14:40 看盘决策，并在 16:05 记录收盘净值 | 由本仓库的 `agent-backtest` API、Web 独立页 `/agent-backtest`、`scripts/run_agent_backtest_cycle.py` 和 `scripts/install_agent_backtest_codex_automations.py` 承载；Codex 是决策者，repo 内只保存上下文、决策、订单、成交和净值 |
+| 尾盘战术台 Codex 自动复盘 | Codex Desktop recurring automation，不是 skill | 每个 A 股工作日 11:30 复盘上一交易日已保存的尾盘实验 | 由 `scripts/run_tail_tactics_codex_review.py` 生成复盘上下文、补早盘指标并写回复盘结果；由 `scripts/install_tail_tactics_codex_automation.py` 注册自动化 |
+| Agent 回测操盘自动化 | Codex Desktop recurring automation，不是 skill | 默认短/中/长三个隔离操盘手，并支持后续新增 active profile；在 `0940看盘`、`1030看盘`、`1120看盘`、`1335看盘`、`1440看盘` 决策，并在 16:05 `收盘复盘` 记录净值、自评和可选策略迭代 | 由本仓库的 `agent-backtest` API、Web 独立页 `/agent-backtest`、`scripts/run_agent_backtest_cycle.py` 和 `scripts/install_agent_backtest_codex_automations.py` 承载；Codex 是决策者，repo 内保存上下文、决策、订单、成交、净值和前向策略版本 |
 | `daily-stock-analysis` / openclaw Skill | 外部集成 skill | openclaw 或其他外部 Agent 通过 HTTP 调用 DSA REST API | 依赖已运行的 DSA API 服务，不是仓库协作规则真源 |
 | 根目录 `SKILL.md` | 产品 / 外部集成说明 | 通过 Python 入口理解 DSA 的股票分析能力 | 不是仓库 AI 协作治理真源；治理规则看 `AGENTS.md` |
 
@@ -54,7 +55,9 @@
 
 用户显式说 `tail-picking-agent` 或“尾盘选股智能体”时，走 `tail-picking-agent` 兼容入口，但实际工作流按 `dsa-candidate-lab` 的 `tail-session-t1` profile 执行。
 
-用户要比较“短线 / 中线 / 长线三个操盘手”的纸面交易收益、希望操盘手每天只看两三次盘并自主买卖时，用 Agent 回测操盘自动化。它不是仓库 skill，也不是 repo 内置 Agent：Codex Desktop automation 会定时唤起 Codex，由 Codex 读取每个 profile 的隔离上下文并写回结构化决策。页面入口是 `/agent-backtest`，安装和运行细节见 `docs/agent-backtest-workbench.md`。
+用户希望“每天上午盘收盘后自动复盘昨天尾盘候选”时，用尾盘战术台 Codex 自动复盘。它不是新 skill；Codex 定时任务会在 11:30 读取上一交易日 `tail_experiment`，拉取/保存早盘指标，生成 review 上下文，再由 Codex 写回复盘。
+
+用户要比较“短线 / 中线 / 长线”以及后续新增操盘手的纸面交易收益、希望操盘手每天固定看盘并自主买卖时，用 Agent 回测操盘自动化。它不是仓库 skill，也不是 repo 内置 Agent：Codex Desktop automation 会定时唤起 Codex，由 Codex 读取每个 active profile 的隔离上下文并写回结构化决策；每次看盘允许 `observe` / `hold`，不要求必须交易。页面入口是 `/agent-backtest`，安装和运行细节见 `docs/agent-backtest-workbench.md`。
 
 外部 Agent 只想通过部署好的 DSA 服务触发分析时，用 openclaw / HTTP Skill，参考 `docs/openclaw-skill-integration.md`。
 
@@ -157,12 +160,40 @@ python scripts/run_agent_backtest_cycle.py prepare \
   --name "A股三周期纸面交易实验" \
   --symbols "002975,002222,603083,603267,002156,600481,002463,603660,000636,603678,603601,603881,002371" \
   --initial-cash-per-agent 20000 \
-  --max-observations-per-day 3
+  --max-observations-per-day 5
 
 python scripts/install_agent_backtest_codex_automations.py --run-id <prepare 输出的 run.id>
 ```
 
-自动化会注册四个本地任务：早盘、午盘、尾盘和收盘净值。前三个任务生成 `short` / `medium` / `long` 三份隔离上下文，Codex 分别读取并调用 `apply-decision`；收盘任务只写入 `daily-nav`。如果 Codex 自动化页面没有立即显示，重启 Codex Desktop。
+自动化会注册六个本地任务：`0940看盘`、`1030看盘`、`1120看盘`、`1335看盘`、`1440看盘` 和 `收盘复盘`。前五个任务为所有 active profile 生成隔离上下文，Codex 分别读取并调用 `apply-decision`；收盘复盘写入 `daily-nav`，逐个 profile 生成自评 markdown，并在有稳定复盘结论时用 `evolve-policy` 写入新的前向策略版本。收盘复盘应使用 `--live-data` 让持仓按当日可靠价格估值。runner 会把已移出股票池但仍持有的标的标记为 `exit_only_symbols`，让操盘手继续研究、持有、减仓或卖出，但不作为重新买入候选。收盘复盘必须检查持仓 payload 的 `valuation_date`、`valuation_source` 和 `valuation_stale`；若当日日线或实时价缺失，不能把该 NAV 当作最终排名。 如果 Codex 自动化页面没有立即显示，重启 Codex Desktop。
+
+### 5. 尾盘战术台 Codex 自动复盘
+
+尾盘 T+1 复盘自动化也使用 Codex Desktop recurring automation，不通过 `.claude/skills/` 注册。安装：
+
+```bash
+python scripts/install_tail_tactics_codex_automation.py
+```
+
+它会注册 `dsa-tail-tactics-midday-review`，按北京时间每个工作日 `11:30` 运行。任务会先调用：
+
+```bash
+python scripts/run_tail_tactics_codex_review.py prepare-review
+```
+
+默认目标是上一 A 股交易日最新一条“已评分、未复盘”的尾盘实验。runner 会自动拉取并保存 9:30-10:00 早盘冲高指标，生成 `.claude/reviews/tail_tactics/<trade_date>/exp_<id>_review_context.md` 供 Codex 阅读。Codex 生成复盘后调用：
+
+```bash
+python scripts/run_tail_tactics_codex_review.py apply-review --experiment-id <id> --review-file <review_md_file>
+```
+
+写回 `review_note_markdown`、`case_summary` 并关闭实验。若没有符合条件的实验或当天非 A 股交易日，任务只输出跳过原因。
+
+双层迭代规则：
+
+- 第一层同花顺筛选逻辑是用户策略，Codex 只能把调整建议写入 `layer1_change_requests` / `.claude/reviews/tail_tactics/layer1_change_requests.md`，等待用户确认。
+- 第二层 Agent 评分与预测逻辑由 Codex 自我迭代；复盘里的 `layer2_calibration_notes` 会追加到 `.claude/reviews/tail_tactics/layer2_calibration.md`，后续尾盘评分 compose 会自动读取并注入第二层上下文。
+- 第二层校准记忆不得反向改写第一层同花顺筛选条件。
 
 ## 关键边界
 
@@ -171,6 +202,7 @@ python scripts/install_agent_backtest_codex_automations.py --run-id <prepare 输
 - `dsa-watchlist-daily-review` 负责用户已有关注列表的日终横向排序，不负责生成候选池筛选策略、尾盘 T+1 预测实验或策略复盘学习。
 - `dsa-candidate-lab` 可以复用单票事实包，但候选池评分、排名、输出契约与复盘学习由它负责。
 - `tail-picking-agent` 只保留兼容入口；新增跨策略逻辑不要继续塞进这个 alias。
+- 尾盘战术台 Codex 自动复盘只复盘已经保存到 `tail_experiment` 的尾盘实验，不自动生成候选池，也不替代 14:40 尾盘评分。
 - Agent 回测操盘自动化不负责生成关注列表，也不复用其他 profile 的决策；每个操盘手只能读取自己的 `*_context.md`，按 A 股交易约束写回观察、决策、订单、成交和净值。
 - `.agents/skills/` 如需存在，应视为 `.claude/skills/` 的本地镜像或适配目录，不作为手工维护的第二真源。
 - 所有 skill 输出都属于研究和风险框架，不是投资指令或自动交易建议。

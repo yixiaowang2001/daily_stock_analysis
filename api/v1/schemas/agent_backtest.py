@@ -17,16 +17,25 @@ class AgentBacktestProfileConfig(BaseModel):
     policy_markdown: str = Field(..., min_length=1)
 
 
+class AgentBacktestProfileCreateRequest(AgentBacktestProfileConfig):
+    pass
+
+
 class AgentBacktestRunCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     symbols: List[str] = Field(..., min_length=1, description="A-share symbol list")
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     initial_cash_per_agent: float = Field(20000.0, gt=0)
-    max_observations_per_day: int = Field(3, ge=1, le=5)
+    max_observations_per_day: int = Field(5, ge=1, le=5)
     rule_version: str = Field("cn_a_v1", min_length=1, max_length=32)
     config: Dict[str, Any] = Field(default_factory=dict)
     profiles: Optional[List[AgentBacktestProfileConfig]] = None
+
+
+class AgentBacktestRunUpdateRequest(BaseModel):
+    symbols: Optional[List[str]] = Field(None, min_length=1, description="A-share symbol list")
+    max_observations_per_day: Optional[int] = Field(None, ge=1, le=5)
 
 
 class AgentBacktestProfileItem(BaseModel):
@@ -51,6 +60,7 @@ class AgentBacktestRunItem(BaseModel):
     status: str
     market: str
     symbols: List[str] = Field(default_factory=list)
+    symbol_names: Dict[str, str] = Field(default_factory=dict)
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     initial_cash_per_agent: float
@@ -206,6 +216,11 @@ class AgentBacktestPolicyItem(BaseModel):
     created_at: Optional[str] = None
 
 
+class AgentBacktestPolicyListResponse(BaseModel):
+    items: List[AgentBacktestPolicyItem] = Field(default_factory=list)
+    total: int
+
+
 class AgentBacktestDailyNavRequest(BaseModel):
     trade_date: date
 
@@ -220,6 +235,7 @@ class AgentBacktestDailyNavItem(BaseModel):
     total_equity: float
     realized_pnl: float
     unrealized_pnl: float
+    valuation_stale: bool = False
     payload: Dict[str, Any] = Field(default_factory=dict)
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

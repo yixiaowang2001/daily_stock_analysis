@@ -15,7 +15,7 @@ export LANG="${LANG:-en_US.UTF-8}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run_agent_backtest_codex_schedule.sh [--phase morning|midday|tail|close] [--dry-run]
+Usage: scripts/run_agent_backtest_codex_schedule.sh [--phase morning|late_morning|pre_noon|midday|tail|close] [--dry-run]
 
 Environment:
   AGENT_BACKTEST_RUN_ID       Agent backtest run id, default 1
@@ -64,8 +64,14 @@ fi
 
 if [[ -z "$PHASE" ]]; then
   case "$now_hm" in
-    09:*|10:*|11:*)
+    09:*)
       PHASE="morning"
+      ;;
+    10:*)
+      PHASE="late_morning"
+      ;;
+    11:*)
+      PHASE="pre_noon"
       ;;
     13:*|14:0*|14:1*|14:2*)
       PHASE="midday"
@@ -84,7 +90,7 @@ if [[ -z "$PHASE" ]]; then
 fi
 
 case "$PHASE" in
-  morning|midday|tail|close)
+  morning|late_morning|pre_noon|midday|tail|close)
     ;;
   *)
     echo "Unsupported phase: $PHASE" >&2
@@ -104,7 +110,7 @@ fi
 trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
 
 live_arg=""
-if [[ "$LIVE_DATA" == "true" && "$PHASE" != "close" ]]; then
+if [[ "$LIVE_DATA" == "true" ]]; then
   live_arg="--live-data"
 fi
 
@@ -118,16 +124,16 @@ prompt="$(cat <<EOF
 - phase: $PHASE
 - timezone: $TIMEZONE
 - 今天只操作本回测系统，不修改策略代码，不 git commit/push。
-- 短线、中线、长线三个操盘手必须严格上下文隔离；读取一个 profile 的 context 后，只为该 profile 决策，不引用其他 profile 的持仓、决策或理由。
-- 符合 A 股规则：只交易 run.symbols，100 股整数手，T+1，买入现金约束，不能越过 data_cutoff_at 使用未来信息。
+- 所有 active profile 必须严格上下文隔离；读取一个 profile 的 context 后，只为该 profile 决策，不引用其他 profile 的持仓、决策或理由。
+- 符合 A 股规则：买入/加仓只限 context 中 buy_allowed_symbols；exit_only_symbols 只能继续研究、持有、减仓或卖出；100 股整数手，T+1，买入现金约束，不能越过 data_cutoff_at 使用未来信息。
 
 执行步骤：
 1. 进入 repo，运行：
    python scripts/run_agent_backtest_cycle.py cycle --run-id $RUN_ID --phase $PHASE --trade-date $trade_date $live_arg
-2. 如果 phase 不是 close，依次读取生成的 short_context.md、medium_context.md、long_context.md。
-3. 为每个 profile 独立判断并调用 apply-decision 写回。允许 observe/hold/buy/sell；买卖必须给出 symbol、side、quantity、order_type、limit_price、submitted_at、effective_at。
+2. 如果 phase 不是 close，依次读取 cycle 输出 generated 列表中的每个 context_markdown。
+3. 为每个 profile 独立判断并调用 apply-decision 写回。允许 observe/hold/buy/sell；不要求每轮必须交易，是否交易由该 profile 的策略自行决定；买卖必须给出 symbol、side、quantity、order_type、limit_price、submitted_at、effective_at。
 4. 如果生成订单，只有在有可靠的成交/回放价格时才调用 fill-order；否则保持 pending，并在总结里说明原因。
-5. 如果 phase 是 close，确认 daily-nav 已记录，并总结三账户现金、持仓、市值和当日事件。
+5. 如果 phase 是 close，确认 daily-nav 已记录；逐个读取生成的 close context，为每个 profile 写一份收盘自评 markdown。若某个 profile 发现可复用的策略教训，再用 evolve-policy 写入新的前向策略版本；不要为了单日噪音强行改策略。
 6. 把本轮简短总结保存到：
    .claude/reviews/agent_backtest/run_${RUN_ID}/${trade_date}/${PHASE}/codex_summary.md
 

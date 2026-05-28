@@ -36,42 +36,63 @@ def _review_prompt(*, run_id: int, phase: str, label: str) -> str:
 Generate isolated contexts with:
 python scripts/run_agent_backtest_cycle.py cycle --run-id {run_id} --phase {phase} --trade-date <YYYY-MM-DD> --live-data
 
-Read each generated context_markdown independently for the short, medium, and long profiles. Act as the sole decision maker for each profile, keep profile contexts isolated, and do not use or infer other profiles' decisions. For each profile, produce exactly one decision JSON that follows the context contract and persist it with:
+Read each generated context_markdown independently for every active profile returned by the cycle command. Act as the sole decision maker for each profile, keep profile contexts isolated, and do not use or infer other profiles' decisions. For each generated profile, produce exactly one decision JSON that follows the context contract; observe/hold with no trade is valid when that profile's strategy calls for waiting. Persist it with:
 python scripts/run_agent_backtest_cycle.py apply-decision --run-id {run_id} --profile-key <profile_key> --trade-date <YYYY-MM-DD> --decision-file <decision_json_file>
 
-Respect A-share constraints: only symbols in the run, buy/sell quantity must be a positive multiple of 100, no same-day sell for shares bought today, no short selling, and use only evidence at or before data_cutoff_at. If a buy/sell order is created, record a simulated fill only when there is reliable executable price evidence at or before data_cutoff_at; otherwise leave it unfilled and explain. End with a concise Chinese summary covering each trader's action, rationale, order/fill status, data gaps, and main risk."""
+Respect A-share constraints: buy/add only symbols in evidence.symbol_scope.buy_allowed_symbols; symbols in evidence.symbol_scope.exit_only_symbols may be researched, held, reduced, or sold but not bought/added; buy/sell quantity must be a positive multiple of 100; no same-day sell for shares bought today; no short selling; and use only evidence at or before data_cutoff_at. If a buy/sell order is created, record a simulated fill only when there is reliable executable price evidence at or before data_cutoff_at; otherwise leave it unfilled and explain. End with a concise Chinese summary covering each trader's action, rationale, order/fill status, data gaps, and main risk."""
 
 
 def _close_prompt(*, run_id: int) -> str:
-    return f"""Run the DSA Codex paper-trading close NAV cycle for agent backtest run_id={run_id}. Use the current Asia/Shanghai date as trade_date. If today is clearly not an A-share trading day, skip without creating observations, decisions, orders, or NAV rows.
+    return f"""Run the DSA Codex paper-trading close review cycle for agent backtest run_id={run_id}. Use the current Asia/Shanghai date as trade_date. If today is clearly not an A-share trading day, skip without creating observations, decisions, orders, policy versions, or NAV rows.
 
 Record the close NAV snapshots with:
-python scripts/run_agent_backtest_cycle.py cycle --run-id {run_id} --phase close --trade-date <YYYY-MM-DD>
+python scripts/run_agent_backtest_cycle.py cycle --run-id {run_id} --phase close --trade-date <YYYY-MM-DD> --live-data
 
-Do not create buy/sell/hold decisions in this close task. Review the returned daily_nav payload and end with a concise Chinese summary comparing the short, medium, and long traders by ending equity, daily PnL, and return. Mention any missing pricing data or stale valuation risk."""
+Do not create buy/sell/hold decisions or orders in this close task. Read each generated close context_markdown independently for every active profile. For each profile, write a concise Chinese self-review markdown file under the generated close context directory, covering today's actions, missed opportunities, risk discipline, data-quality limits, and the next-session focus. Use the close self-review contract in the context.
+
+If the profile finds a durable strategy lesson, create a forward-only policy JSON with version_label, body_markdown, effective_from, and change_reason, then persist it with:
+python scripts/run_agent_backtest_cycle.py evolve-policy --run-id {run_id} --profile-key <profile_key> --policy-file <policy_json_file>
+
+Do not update policy just to react to one noisy day; keep the profile's style boundary intact. Review the returned daily_nav payload for every active profile and cross-check each open position's last_price, valuation_date, valuation_source, and valuation_stale against today's fills/orders and close_price_overrides. If valuation_stale is true or a held symbol has no reliable same-day price, do not rank that trader as if the NAV were final; explain the stale valuation risk and any estimated mark-to-market separately. End with a concise Chinese summary comparing all active traders by ending equity, daily PnL, return, self-review conclusions, and any policy versions created."""
 
 
 def build_specs(run_id: int) -> List[AutomationSpec]:
     return [
         AutomationSpec(
             automation_id="dsa-agent-backtest-morning",
-            name="操盘 · 早盘复盘",
+            name="0940看盘",
             phase="morning",
             hour=9,
             minute=40,
             prompt=_review_prompt(run_id=run_id, phase="morning", label="morning"),
         ),
         AutomationSpec(
+            automation_id="dsa-agent-backtest-late-morning",
+            name="1030看盘",
+            phase="late_morning",
+            hour=10,
+            minute=30,
+            prompt=_review_prompt(run_id=run_id, phase="late_morning", label="late-morning"),
+        ),
+        AutomationSpec(
+            automation_id="dsa-agent-backtest-pre-noon",
+            name="1120看盘",
+            phase="pre_noon",
+            hour=11,
+            minute=20,
+            prompt=_review_prompt(run_id=run_id, phase="pre_noon", label="pre-noon"),
+        ),
+        AutomationSpec(
             automation_id="dsa-agent-backtest-midday",
-            name="操盘 · 午盘复盘",
+            name="1335看盘",
             phase="midday",
             hour=13,
-            minute=30,
+            minute=35,
             prompt=_review_prompt(run_id=run_id, phase="midday", label="midday"),
         ),
         AutomationSpec(
             automation_id="dsa-agent-backtest-tail",
-            name="操盘 · 尾盘复盘",
+            name="1440看盘",
             phase="tail",
             hour=14,
             minute=40,
@@ -79,7 +100,7 @@ def build_specs(run_id: int) -> List[AutomationSpec]:
         ),
         AutomationSpec(
             automation_id="dsa-agent-backtest-close",
-            name="操盘 · 收盘净值",
+            name="收盘复盘",
             phase="close",
             hour=16,
             minute=5,

@@ -438,9 +438,17 @@ class PortfolioService:
         account_id: Optional[int] = None,
         as_of: Optional[date] = None,
         cost_method: str = "fifo",
+        price_overrides: Optional[Dict[str, float]] = None,
+        price_override_sources: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         as_of_date = as_of or date.today()
         method = self._normalize_cost_method(cost_method)
+        price_overrides_norm = self._normalize_price_overrides(price_overrides)
+        price_override_sources_norm = {
+            canonical_stock_code(symbol): str(source)
+            for symbol, source in (price_override_sources or {}).items()
+            if canonical_stock_code(symbol)
+        }
 
         if account_id is not None:
             account = self._require_active_account(account_id)
@@ -459,10 +467,17 @@ class PortfolioService:
             "fee_total": 0.0,
             "tax_total": 0.0,
             "fx_stale": False,
+            "valuation_stale": False,
         }
 
         for account in account_rows:
-            account_snapshot = self._replay_account(account=account, as_of_date=as_of_date, cost_method=method)
+            account_snapshot = self._replay_account(
+                account=account,
+                as_of_date=as_of_date,
+                cost_method=method,
+                price_overrides=price_overrides_norm,
+                price_override_sources=price_override_sources_norm,
+            )
 
             self.repo.replace_positions_lots_and_snapshot(
                 account_id=account.id,
@@ -546,6 +561,9 @@ class PortfolioService:
                     stale_tax,
                 ]
             )
+            aggregate["valuation_stale"] = (
+                aggregate["valuation_stale"] or bool(account_snapshot.get("valuation_stale"))
+            )
 
         return {
             "as_of": as_of_date.isoformat(),
@@ -560,6 +578,7 @@ class PortfolioService:
             "fee_total": round(aggregate["fee_total"], 6),
             "tax_total": round(aggregate["tax_total"], 6),
             "fx_stale": aggregate["fx_stale"],
+            "valuation_stale": aggregate["valuation_stale"],
             "accounts": accounts_payload,
         }
 
@@ -725,7 +744,15 @@ class PortfolioService:
 
         return quantity_held
 
-    def _replay_account(self, *, account: Any, as_of_date: date, cost_method: str) -> Dict[str, Any]:
+    def _replay_account(
+        self,
+        *,
+        account: Any,
+        as_of_date: date,
+        cost_method: str,
+        price_overrides: Dict[str, float],
+        price_override_sources: Dict[str, str],
+    ) -> Dict[str, Any]:
         trades = self.repo.list_trades(account.id, as_of=as_of_date)
         cash_ledger = self.repo.list_cash_ledger(account.id, as_of=as_of_date)
         corporate_actions = self.repo.list_corporate_actions(account.id, as_of=as_of_date)
@@ -878,14 +905,16 @@ class PortfolioService:
                 else:
                     raise ValueError(f"Unsupported corporate action type: {event.action_type}")
 
-        position_rows, lot_rows, market_value_base, total_cost_base, stale_pos = self._build_positions(
+        position_rows, lot_rows, market_value_base, total_cost_base, stale_pos_fx, valuation_stale = self._build_positions(
             account=account,
             as_of_date=as_of_date,
             cost_method=cost_method,
             fifo_lots=fifo_lots,
             avg_state=avg_state,
+            price_overrides=price_overrides,
+            price_override_sources=price_override_sources,
         )
-        fx_stale = fx_stale or stale_pos
+        fx_stale = fx_stale or stale_pos_fx
 
         total_cash_base = 0.0
         for currency, amount in cash_balances.items():
@@ -918,6 +947,7 @@ class PortfolioService:
             "fee_total": round(fees_total_base, 6),
             "tax_total": round(taxes_total_base, 6),
             "fx_stale": fx_stale,
+            "valuation_stale": valuation_stale,
             "positions": position_rows,
         }
 
@@ -934,6 +964,7 @@ class PortfolioService:
             "fee_total": float(fees_total_base),
             "tax_total": float(taxes_total_base),
             "fx_stale": fx_stale,
+            "valuation_stale": valuation_stale,
         }
 
     def _build_positions(
@@ -944,12 +975,15 @@ class PortfolioService:
         cost_method: str,
         fifo_lots: Dict[Tuple[str, str, str], List[Dict[str, Any]]],
         avg_state: Dict[Tuple[str, str, str], _AvgState],
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float, float, bool]:
+        price_overrides: Dict[str, float],
+        price_override_sources: Dict[str, str],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float, float, bool, bool]:
         position_rows: List[Dict[str, Any]] = []
         lot_rows: List[Dict[str, Any]] = []
         market_value_base = 0.0
         total_cost_base = 0.0
         fx_stale = False
+        valuation_stale_any = False
 
         keys: Iterable[Tuple[str, str, str]]
         if cost_method == "fifo":
@@ -987,9 +1021,30 @@ class PortfolioService:
                     }
                 )
 
-            last_price = self.repo.get_latest_close(symbol=symbol, as_of=as_of_date)
+            override_price = price_overrides.get(symbol)
+            valuation_date: Optional[str] = None
+            valuation_source: Optional[str] = None
+            valuation_stale = False
+
+            if override_price is not None and override_price > 0:
+                last_price = float(override_price)
+                valuation_date = as_of_date.isoformat()
+                valuation_source = price_override_sources.get(symbol) or "price_override"
+            else:
+                close_info = self.repo.get_latest_close_info(symbol=symbol, as_of=as_of_date)
+                if close_info is None:
+                    last_price = None
+                else:
+                    last_price = float(close_info["close"])
+                    valuation_date = close_info.get("date")
+                    valuation_source = close_info.get("data_source") or "stock_daily"
+                    valuation_stale = valuation_date != as_of_date.isoformat()
+
             if last_price is None or last_price <= 0:
                 last_price = avg_cost
+                valuation_date = None
+                valuation_source = "avg_cost_fallback"
+                valuation_stale = True
 
             local_market_value = qty * float(last_price)
             market_base, stale_market, _ = self._convert_amount(
@@ -1006,6 +1061,7 @@ class PortfolioService:
             )
             unrealized_base = market_base - cost_base
             fx_stale = fx_stale or stale_market or stale_cost
+            valuation_stale_any = valuation_stale_any or valuation_stale
 
             position_rows.append(
                 {
@@ -1016,6 +1072,9 @@ class PortfolioService:
                     "avg_cost": round(avg_cost, 8),
                     "total_cost": round(total_cost, 8),
                     "last_price": round(float(last_price), 8),
+                    "valuation_date": valuation_date,
+                    "valuation_source": valuation_source,
+                    "valuation_stale": valuation_stale,
                     "market_value_base": round(market_base, 8),
                     "unrealized_pnl_base": round(unrealized_base, 8),
                     "valuation_currency": account.base_currency,
@@ -1025,7 +1084,22 @@ class PortfolioService:
             market_value_base += market_base
             total_cost_base += cost_base
 
-        return position_rows, lot_rows, market_value_base, total_cost_base, fx_stale
+        return position_rows, lot_rows, market_value_base, total_cost_base, fx_stale, valuation_stale_any
+
+    @staticmethod
+    def _normalize_price_overrides(price_overrides: Optional[Dict[str, float]]) -> Dict[str, float]:
+        result: Dict[str, float] = {}
+        for raw_symbol, raw_price in (price_overrides or {}).items():
+            symbol = canonical_stock_code(str(raw_symbol or ""))
+            if not symbol:
+                continue
+            try:
+                price = float(raw_price)
+            except (TypeError, ValueError):
+                continue
+            if price > 0:
+                result[symbol] = price
+        return result
 
     @staticmethod
     def _consume_fifo_lots(

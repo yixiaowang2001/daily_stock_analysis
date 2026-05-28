@@ -709,7 +709,7 @@ class AgentBacktestRun(Base):
     start_date = Column(Date, nullable=True, index=True)
     end_date = Column(Date, nullable=True, index=True)
     initial_cash_per_agent = Column(Float, nullable=False, default=20000.0)
-    max_observations_per_day = Column(Integer, nullable=False, default=3)
+    max_observations_per_day = Column(Integer, nullable=False, default=5)
     rule_version = Column(String(32), nullable=False, default='cn_a_v1')
     config_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.now, index=True)

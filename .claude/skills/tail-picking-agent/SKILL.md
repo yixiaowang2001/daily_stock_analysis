@@ -32,6 +32,12 @@ Layer 1 is the user's Tonghuashun tail-session screening strategy. Current canon
 
 Layer 2 is Agent evaluation: risk gate, score, `action_level`, T+1 open forecast, review, and strategy-learning notes. Do not turn Layer 2 labels such as `watch`, `candidate`, or `priority` into Tonghuashun screening conditions.
 
+Layer iteration rule:
+
+- Layer 1 Tonghuashun screening logic belongs to the user. If review evidence suggests changing Layer 1, state it explicitly as a pending request and do not apply it automatically.
+- Layer 2 Agent evaluation / forecast logic should self-iterate. Review outputs may include `layer2_calibration_notes`; these are accumulated in `.claude/reviews/tail_tactics/layer2_calibration.md` and should be used in later scoring.
+- Never let Layer 2 calibration notes rewrite Layer 1 screening conditions.
+
 ## Repository
 
 Default DSA repository path is the current repository root containing `AGENTS.md` and `main.py`. If the current working directory is not the DSA repository, use `DSA_REPO_ROOT` when provided or ask the user for the path before persisting data.
@@ -53,6 +59,7 @@ When working inside the DSA repository, follow root `AGENTS.md`.
 7. Put a readable Chinese report first, then append machine-readable `tail_score_result` JSON.
 8. Persist every real prediction/evaluation before final answer, including one-symbol prompts, and mention the experiment id.
 9. For reviews, fetch or accept morning metrics first, then save review notes and case summary when persistence is supported. If the original prediction only exists in Codex session logs, backfill it into DSA storage before writing the review.
+10. When reviewing, write first-layer changes only as `layer1_change_requests` for user confirmation. Write second-layer learning as `layer2_calibration_notes` so future scoring can self-calibrate.
 
 ## Output Contract
 

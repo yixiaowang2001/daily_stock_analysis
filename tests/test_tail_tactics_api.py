@@ -58,6 +58,7 @@ class TailTacticsApiTestCase(unittest.TestCase):
         )
         os.environ["ENV_FILE"] = str(self.env_path)
         os.environ["DATABASE_PATH"] = str(self.db_path)
+        os.environ["TAIL_LAYER2_CALIBRATION_PATH"] = str(self.data_dir / "layer2_calibration.md")
         Config.reset_instance()
         DatabaseManager.reset_instance()
         static_dir = self.data_dir / "empty-static"
@@ -70,6 +71,7 @@ class TailTacticsApiTestCase(unittest.TestCase):
         Config.reset_instance()
         os.environ.pop("ENV_FILE", None)
         os.environ.pop("DATABASE_PATH", None)
+        os.environ.pop("TAIL_LAYER2_CALIBRATION_PATH", None)
         self.temp_dir.cleanup()
 
     def test_strategy_version_crud_and_diff(self) -> None:

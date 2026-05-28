@@ -102,6 +102,36 @@ JSON 仍需保留在报告末尾作为机器解析附录，供战术台保存、
 4. 在 **实验与评分** 中对选中实验点击 **自动拉取并保存**（或仍用手动填写 +「手动保存」）；再 **生成复盘**（需已有早盘指标行）。
 5. 编辑并保存 **复盘笔记** 与 **案例摘要**；如果要改策略，先判断改的是第一层同花顺选股条件还是第二层 Agent 评估/预测权重；在 **策略与案例** Tab 的 **案例库** 表格中 **查看**（悬浮窗）或 **删除** 实验（需确认）。亦可在实验详情弹窗中跳转至「实验与评分」继续操作。
 
+## Codex 11:30 自动复盘
+
+尾盘战术台可注册一个本地 Codex Desktop recurring automation，在每个 A 股工作日 `11:30` 复盘上一交易日已保存且未复盘的尾盘实验：
+
+```bash
+python scripts/install_tail_tactics_codex_automation.py
+```
+
+自动化会写入 `~/.codex/automations/dsa-tail-tactics-midday-review/automation.toml`。如果 Codex Desktop 没有立即显示，重启 Codex Desktop。
+
+任务触发后，Codex 会先运行：
+
+```bash
+python scripts/run_tail_tactics_codex_review.py prepare-review
+```
+
+该 runner 会解析上一 A 股交易日、查找最新未复盘且已有 `ranking_output` 的 `tail_experiment`、自动拉取并保存早盘 9:30-10:00 冲高指标，然后在 `.claude/reviews/tail_tactics/<trade_date>/` 下生成 `exp_<id>_review_context.md/json`。Codex 读取上下文生成中文复盘后，再通过：
+
+```bash
+python scripts/run_tail_tactics_codex_review.py apply-review --experiment-id <id> --review-file <review_md_file>
+```
+
+把复盘写回 `review_note_markdown`、`case_summary`，并将实验状态置为 `closed`。若当天不是 A 股交易日、上一交易日没有尾盘实验、实验尚未评分，或早盘指标拉取失败且没有现有指标，任务会跳过并说明原因。
+
+### 双层迭代规则
+
+- **第一层同花顺选股策略**：Codex 只能提出 `layer1_change_requests`，等待用户明确确认后才修改；不会把复盘里的第一层建议自动应用到筛选条件。
+- **第二层 Agent 评估 / 预测策略**：Codex 会把复盘里的 `layer2_calibration_notes` 追加到 `.claude/reviews/tail_tactics/layer2_calibration.md`。后续 `compose?kind=rank` 会自动读取这份本地校准记忆，并只用于第二层评分、风险闸门和目标区间校准。
+- 第一层待确认建议会单独写入 `.claude/reviews/tail_tactics/layer1_change_requests.md`，但不会注入后续评分上下文。
+
 ## 已知限制（P0）
 
 - 自动拉取依赖 **外网** 与 **AkShare / efinance / 项目日线数据源**；代理异常、停牌、历史过久导致分钟接口无数据时，尾盘评分事实包会保留 `fallback_attempts`，早盘指标会回退 **日线最高价**（非严格 10:00 窗口），响应 `notes` 与每条 `source` 会标明。

@@ -11,6 +11,8 @@ from typing import Any, Dict, Iterable, List, Optional
 from sqlalchemy import and_, select
 
 from data_provider.base import canonical_stock_code
+from src.data.stock_index_loader import get_index_stock_name
+from src.data.stock_mapping import STOCK_NAME_MAP, is_meaningful_stock_name
 from src.repositories.agent_backtest_repo import AgentBacktestRepository
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.portfolio_service import PortfolioService
@@ -76,6 +78,7 @@ DEFAULT_RULE_CONFIG: Dict[str, Any] = {
 
 VALID_SIDES = {"buy", "sell"}
 VALID_ORDER_TYPES = {"limit", "market"}
+MAX_OBSERVATIONS_PER_DAY = 5
 EPS = 1e-8
 
 
@@ -99,7 +102,7 @@ class AgentBacktestService:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         initial_cash_per_agent: float = 20000.0,
-        max_observations_per_day: int = 3,
+        max_observations_per_day: int = MAX_OBSERVATIONS_PER_DAY,
         rule_version: str = "cn_a_v1",
         config: Optional[Dict[str, Any]] = None,
         profiles: Optional[List[Dict[str, Any]]] = None,
@@ -114,8 +117,10 @@ class AgentBacktestService:
             raise AgentBacktestError("end_date cannot be before start_date")
         if initial_cash_per_agent <= 0:
             raise AgentBacktestError("initial_cash_per_agent must be > 0")
-        if max_observations_per_day < 1 or max_observations_per_day > 5:
-            raise AgentBacktestError("max_observations_per_day must be between 1 and 5")
+        if max_observations_per_day < 1 or max_observations_per_day > MAX_OBSERVATIONS_PER_DAY:
+            raise AgentBacktestError(
+                f"max_observations_per_day must be between 1 and {MAX_OBSERVATIONS_PER_DAY}"
+            )
 
         rule_config = self._merged_rule_config(config)
         profile_inputs = profiles or DEFAULT_AGENT_PROFILES
@@ -223,6 +228,129 @@ class AgentBacktestService:
             ).scalars().all()
             return self._run_row_to_dict(run, profiles=list(profiles), session=session)
 
+    def update_run_settings(
+        self,
+        *,
+        run_id: int,
+        symbols: Optional[Iterable[str]] = None,
+        max_observations_per_day: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        symbols_norm: Optional[List[str]] = None
+        if symbols is not None:
+            symbols_norm = self._normalize_symbols(symbols)
+            if not symbols_norm:
+                raise AgentBacktestError("symbols is required")
+        if max_observations_per_day is not None and (
+            int(max_observations_per_day) < 1
+            or int(max_observations_per_day) > MAX_OBSERVATIONS_PER_DAY
+        ):
+            raise AgentBacktestError(
+                f"max_observations_per_day must be between 1 and {MAX_OBSERVATIONS_PER_DAY}"
+            )
+
+        with self.db.session_scope() as session:
+            run = self._require_run_in_session(session, run_id)
+            if symbols_norm is not None:
+                run.symbols_json = self._json_dumps(symbols_norm)
+            if max_observations_per_day is not None:
+                run.max_observations_per_day = int(max_observations_per_day)
+            run.updated_at = datetime.now()
+
+        return self.get_run(run_id)
+
+    def add_profile(
+        self,
+        *,
+        run_id: int,
+        profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        profile_key = self._normalize_profile_key(profile.get("profile_key"))
+        display_name = (profile.get("display_name") or profile_key).strip()
+        style_profile = (profile.get("style_profile") or profile_key).strip()
+        version_label = (profile.get("policy_version_label") or "v1.0").strip()
+        policy_markdown = (profile.get("policy_markdown") or "").strip()
+        if not policy_markdown:
+            raise AgentBacktestError(f"policy_markdown is required for {profile_key}")
+
+        joined_date = date.today()
+        with self.db.session_scope() as session:
+            run = self._require_run_in_session(session, run_id)
+            existing = self.repo.get_profile(run_id=run_id, profile_key=profile_key, session=session)
+            if existing is not None:
+                raise AgentBacktestError(f"duplicate profile_key: {profile_key}")
+
+            account = PortfolioAccount(
+                owner_id=f"agent_backtest_run:{run.id}:{profile_key}",
+                name=f"{run.name} / {display_name}",
+                broker="agent-backtest",
+                market="cn",
+                base_currency="CNY",
+                is_active=True,
+            )
+            session.add(account)
+            session.flush()
+
+            session.add(
+                PortfolioCashLedger(
+                    account_id=account.id,
+                    event_date=joined_date,
+                    direction="in",
+                    amount=float(run.initial_cash_per_agent),
+                    currency="CNY",
+                    note=f"agent_backtest_run:{run.id} profile {profile_key} initial cash",
+                )
+            )
+
+            row = AgentBacktestProfile(
+                run_id=run.id,
+                account_id=account.id,
+                profile_key=profile_key,
+                display_name=display_name,
+                style_profile=style_profile,
+                policy_version_label=version_label,
+                policy_markdown=policy_markdown,
+                context_namespace=f"agent_backtest:{run.id}:{profile_key}",
+                status="active",
+            )
+            session.add(row)
+            session.flush()
+
+            session.add(
+                AgentBacktestPolicyVersion(
+                    run_id=run.id,
+                    profile_id=row.id,
+                    version_label=version_label,
+                    body_markdown=policy_markdown,
+                    effective_from=joined_date,
+                    change_reason="added profile",
+                    status="active",
+                )
+            )
+            run.updated_at = datetime.now()
+            session.flush()
+            return self._profile_row_to_dict(row, session=session)
+
+    def deactivate_profile(self, *, run_id: int, profile_key: str) -> Dict[str, Any]:
+        with self.db.session_scope() as session:
+            run = self._require_run_in_session(session, run_id)
+            profile = self.repo.get_profile(
+                run_id=run_id,
+                profile_key=self._normalize_profile_key(profile_key),
+                session=session,
+            )
+            if profile is None:
+                raise AgentBacktestError(f"profile not found: {profile_key}")
+            profile.status = "inactive"
+            profile.updated_at = datetime.now()
+            account = session.execute(
+                select(PortfolioAccount).where(PortfolioAccount.id == profile.account_id).limit(1)
+            ).scalar_one_or_none()
+            if account is not None:
+                account.is_active = False
+            run.updated_at = datetime.now()
+
+        return self.get_run(run_id)
+
     def record_observation(
         self,
         *,
@@ -295,9 +423,15 @@ class AgentBacktestService:
 
         with self.db.session_scope() as session:
             run = self._require_run_in_session(session, run_id)
-            if symbol_norm is not None and symbol_norm not in self._json_loads(run.symbols_json, []):
-                raise AgentBacktestError(f"decision symbol is outside run symbols: {symbol_norm}")
             profile = self._require_profile_in_session(session, run_id, profile_key)
+            self._validate_decision_symbol_scope(
+                run=run,
+                profile=profile,
+                symbol=symbol_norm,
+                action=action_norm,
+                side=side_norm,
+                trade_date=trade_date,
+            )
             if observation_id is not None:
                 observation = self.repo.get_observation(run_id=run_id, observation_id=observation_id, session=session)
                 if observation is None or observation.profile_id != profile.id:
@@ -354,9 +488,14 @@ class AgentBacktestService:
 
         with self.db.session_scope() as session:
             run = self._require_run_in_session(session, run_id)
-            if symbol_norm not in self._json_loads(run.symbols_json, []):
-                raise AgentBacktestError(f"order symbol is outside run symbols: {symbol_norm}")
             profile = self._require_profile_in_session(session, run_id, profile_key)
+            self._validate_order_symbol_scope(
+                run=run,
+                profile=profile,
+                symbol=symbol_norm,
+                side=side_norm,
+                trade_date=effective_at.date(),
+            )
             if decision_id is not None:
                 decision = self.repo.get_decision(run_id=run_id, decision_id=decision_id, session=session)
                 if decision is None or decision.profile_id != profile.id:
@@ -527,7 +666,22 @@ class AgentBacktestService:
             payload = self._policy_row_to_dict(row)
         return payload
 
-    def record_daily_nav(self, *, run_id: int, trade_date: date) -> Dict[str, Any]:
+    def list_policies(self, *, run_id: int, profile_key: str) -> Dict[str, Any]:
+        with self.db.session_scope() as session:
+            self._require_run_in_session(session, run_id)
+            profile = self._require_profile_in_session(session, run_id, profile_key)
+            rows = self.repo.list_policies(profile_id=profile.id, session=session)
+            items = [self._policy_row_to_dict(row) for row in rows]
+        return {"items": items, "total": len(items)}
+
+    def record_daily_nav(
+        self,
+        *,
+        run_id: int,
+        trade_date: date,
+        price_overrides: Optional[Dict[str, float]] = None,
+        price_override_sources: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         with self.db.get_session() as session:
             run = session.execute(
                 select(AgentBacktestRun).where(AgentBacktestRun.id == run_id).limit(1)
@@ -535,7 +689,11 @@ class AgentBacktestService:
             if run is None:
                 raise AgentBacktestError(f"agent backtest run not found: {run_id}")
             profiles = self.repo.list_profiles(run_id=run_id, session=session)
-            profile_payloads = [self._profile_row_to_dict(profile, session=session) for profile in profiles]
+            profile_payloads = [
+                self._profile_row_to_dict(profile, session=session)
+                for profile in profiles
+                if profile.status == "active"
+            ]
 
         items: List[Dict[str, Any]] = []
         for profile in profile_payloads:
@@ -543,6 +701,8 @@ class AgentBacktestService:
                 account_id=profile["account_id"],
                 as_of=trade_date,
                 cost_method="fifo",
+                price_overrides=price_overrides,
+                price_override_sources=price_override_sources,
             )
             account_snapshot = (snapshot.get("accounts") or [{}])[0]
             items.append(
@@ -555,6 +715,7 @@ class AgentBacktestService:
                     "total_equity": float(account_snapshot.get("total_equity") or 0.0),
                     "realized_pnl": float(account_snapshot.get("realized_pnl") or 0.0),
                     "unrealized_pnl": float(account_snapshot.get("unrealized_pnl") or 0.0),
+                    "valuation_stale": bool(account_snapshot.get("valuation_stale")),
                     "payload": account_snapshot,
                 }
             )
@@ -693,6 +854,54 @@ class AgentBacktestService:
         if abs(float(quantity) % 100) > EPS:
             raise AgentBacktestError("A-share order quantity must be a multiple of 100")
 
+    def _validate_decision_symbol_scope(
+        self,
+        *,
+        run: AgentBacktestRun,
+        profile: AgentBacktestProfile,
+        symbol: Optional[str],
+        action: str,
+        side: Optional[str],
+        trade_date: date,
+    ) -> None:
+        if symbol is None:
+            return
+        if symbol in self._json_loads(run.symbols_json, []):
+            return
+        effective_side = side or (action if action in VALID_SIDES else None)
+        if effective_side == "buy":
+            raise AgentBacktestError(f"decision symbol is outside run symbols and cannot be bought: {symbol}")
+        if not self._has_open_position(account_id=int(profile.account_id), symbol=symbol, as_of=trade_date):
+            raise AgentBacktestError(f"decision symbol is outside run symbols and not currently held: {symbol}")
+
+    def _validate_order_symbol_scope(
+        self,
+        *,
+        run: AgentBacktestRun,
+        profile: AgentBacktestProfile,
+        symbol: str,
+        side: str,
+        trade_date: date,
+    ) -> None:
+        if symbol in self._json_loads(run.symbols_json, []):
+            return
+        if side == "buy":
+            raise AgentBacktestError(f"order symbol is outside run symbols and cannot be bought: {symbol}")
+        if not self._has_open_position(account_id=int(profile.account_id), symbol=symbol, as_of=trade_date):
+            raise AgentBacktestError(f"order symbol is outside run symbols and not currently held: {symbol}")
+
+    def _has_open_position(self, *, account_id: int, symbol: str, as_of: date) -> bool:
+        snapshot = self.portfolio_service.get_portfolio_snapshot(
+            account_id=account_id,
+            as_of=as_of,
+            cost_method="fifo",
+        )
+        account = (snapshot.get("accounts") or [{}])[0]
+        for position in account.get("positions") or []:
+            if position.get("symbol") == symbol and float(position.get("quantity") or 0.0) > EPS:
+                return True
+        return False
+
     def _validate_fill_against_a_share_rules(
         self,
         *,
@@ -780,6 +989,8 @@ class AgentBacktestService:
         profile = self.repo.get_profile(run_id=run_id, profile_key=key, session=session)
         if profile is None:
             raise AgentBacktestError(f"profile not found: {key}")
+        if profile.status != "active":
+            raise AgentBacktestError(f"profile inactive: {key}")
         return profile
 
     # ------------------------------------------------------------------
@@ -792,12 +1003,14 @@ class AgentBacktestService:
         profiles: Optional[List[AgentBacktestProfile]] = None,
         session: Optional[Any] = None,
     ) -> Dict[str, Any]:
+        symbols = self._json_loads(row.symbols_json, [])
         payload = {
             "id": int(row.id),
             "name": row.name,
             "status": row.status,
             "market": row.market,
-            "symbols": self._json_loads(row.symbols_json, []),
+            "symbols": symbols,
+            "symbol_names": self._resolve_symbol_names(symbols),
             "start_date": row.start_date.isoformat() if row.start_date else None,
             "end_date": row.end_date.isoformat() if row.end_date else None,
             "initial_cash_per_agent": float(row.initial_cash_per_agent or 0.0),
@@ -811,8 +1024,21 @@ class AgentBacktestService:
             payload["profiles"] = [
                 self._profile_row_to_dict(profile, session=session)
                 for profile in profiles
+                if profile.status == "active"
             ]
         return payload
+
+    @staticmethod
+    def _resolve_symbol_names(symbols: Iterable[str]) -> Dict[str, str]:
+        names: Dict[str, str] = {}
+        for raw_symbol in symbols:
+            symbol = str(raw_symbol or "").strip().upper()
+            if not symbol:
+                continue
+            lookup_code = canonical_stock_code(symbol)
+            name = STOCK_NAME_MAP.get(lookup_code) or get_index_stock_name(lookup_code)
+            names[symbol] = str(name).strip() if is_meaningful_stock_name(name, lookup_code) else ""
+        return names
 
     def _profile_row_to_dict(self, row: AgentBacktestProfile, *, session: Optional[Any] = None) -> Dict[str, Any]:
         latest_policy = self.repo.latest_policy(profile_id=row.id, session=session) if session is not None else None
@@ -927,7 +1153,8 @@ class AgentBacktestService:
 
     @staticmethod
     def _nav_row_to_dict(row: AgentBacktestDailyNav) -> Dict[str, Any]:
-        return {
+        payload = AgentBacktestService._json_loads(row.payload_json, {})
+        data = {
             "id": int(row.id),
             "run_id": int(row.run_id),
             "profile_id": int(row.profile_id),
@@ -937,10 +1164,12 @@ class AgentBacktestService:
             "total_equity": float(row.total_equity),
             "realized_pnl": float(row.realized_pnl),
             "unrealized_pnl": float(row.unrealized_pnl),
-            "payload": AgentBacktestService._json_loads(row.payload_json, {}),
+            "payload": payload,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
+        data["valuation_stale"] = bool(payload.get("valuation_stale"))
+        return data
 
     @staticmethod
     def _json_dumps(value: Any) -> str:

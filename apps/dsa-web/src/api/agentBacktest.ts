@@ -3,8 +3,12 @@ import { toCamelCase } from './utils';
 import type {
   AgentBacktestDailyNavResponse,
   AgentBacktestEventsResponse,
+  AgentBacktestPolicyListResponse,
+  AgentBacktestProfileCreateRequest,
+  AgentBacktestProfileItem,
   AgentBacktestRunItem,
   AgentBacktestRunListResponse,
+  AgentBacktestRunUpdateRequest,
 } from '../types/agentBacktest';
 
 type RunListQuery = {
@@ -50,6 +54,32 @@ export const agentBacktestApi = {
   async getRun(runId: number): Promise<AgentBacktestRunItem> {
     const response = await apiClient.get<Record<string, unknown>>(`/api/v1/agent-backtest/runs/${runId}`);
     return toCamelCase<AgentBacktestRunItem>(response.data);
+  },
+
+  async updateRun(runId: number, payload: AgentBacktestRunUpdateRequest): Promise<AgentBacktestRunItem> {
+    const response = await apiClient.patch<Record<string, unknown>>(`/api/v1/agent-backtest/runs/${runId}`, {
+      symbols: payload.symbols,
+      max_observations_per_day: payload.maxObservationsPerDay,
+    });
+    return toCamelCase<AgentBacktestRunItem>(response.data);
+  },
+
+  async addProfile(runId: number, payload: AgentBacktestProfileCreateRequest): Promise<AgentBacktestProfileItem> {
+    const response = await apiClient.post<Record<string, unknown>>(`/api/v1/agent-backtest/runs/${runId}/profiles`, {
+      profile_key: payload.profileKey,
+      display_name: payload.displayName,
+      style_profile: payload.styleProfile,
+      policy_version_label: payload.policyVersionLabel,
+      policy_markdown: payload.policyMarkdown,
+    });
+    return toCamelCase<AgentBacktestProfileItem>(response.data);
+  },
+
+  async listPolicies(runId: number, profileKey: string): Promise<AgentBacktestPolicyListResponse> {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/agent-backtest/runs/${runId}/profiles/${profileKey}/policies`,
+    );
+    return toCamelCase<AgentBacktestPolicyListResponse>(response.data);
   },
 
   async listEvents(runId: number, query: EventsQuery = {}): Promise<AgentBacktestEventsResponse> {

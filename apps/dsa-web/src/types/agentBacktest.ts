@@ -16,12 +16,21 @@ export interface AgentBacktestProfileItem {
   updatedAt?: string | null;
 }
 
+export interface AgentBacktestProfileCreateRequest {
+  profileKey: string;
+  displayName: string;
+  styleProfile: string;
+  policyVersionLabel?: string;
+  policyMarkdown: string;
+}
+
 export interface AgentBacktestRunItem {
   id: number;
   name: string;
   status: string;
   market: string;
   symbols: string[];
+  symbolNames?: Record<string, string>;
   startDate?: string | null;
   endDate?: string | null;
   initialCashPerAgent: number;
@@ -35,6 +44,29 @@ export interface AgentBacktestRunItem {
 
 export interface AgentBacktestRunListResponse {
   items: AgentBacktestRunItem[];
+  total: number;
+}
+
+export interface AgentBacktestRunUpdateRequest {
+  symbols?: string[];
+  maxObservationsPerDay?: number;
+}
+
+export interface AgentBacktestPolicyItem {
+  id: number;
+  runId: number;
+  profileId: number;
+  versionLabel: string;
+  bodyMarkdown: string;
+  parentPolicyId?: number | null;
+  effectiveFrom?: string | null;
+  changeReason?: string | null;
+  status: string;
+  createdAt?: string | null;
+}
+
+export interface AgentBacktestPolicyListResponse {
+  items: AgentBacktestPolicyItem[];
   total: number;
 }
 
@@ -118,6 +150,7 @@ export interface AgentBacktestDailyNavItem {
   totalEquity: number;
   realizedPnl: number;
   unrealizedPnl: number;
+  valuationStale?: boolean;
   payload: Record<string, unknown>;
   createdAt?: string | null;
   updatedAt?: string | null;

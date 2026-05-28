@@ -1025,13 +1025,15 @@ python main.py --debug
 
 ### Agent 回测实验台
 
-`/api/v1/agent-backtest` 是新增的多操盘手纸面交易实验 API，面向 A 股关注列表创建短线 / 中线 / 长线三个隔离 profile。它不替代上面的历史建议回测，而是记录每个操盘手在某个时间点看到的证据、决策、订单、成交和每日净值。默认约束包括 6 位 A 股代码、100 股整数手、T+1 卖出校验、买入现金校验，以及独立组合账户落账。Web 前端入口为独立页面 `/agent-backtest`（“操盘”），可用每日 16:00 后净值快照对比三操盘手收益曲线、当前权益、策略版本、最新决策和事件流。Codex 自动化可通过 `python scripts/install_agent_backtest_codex_automations.py --run-id <id>` 注册 09:40、13:30、14:40 三次复盘和 16:05 收盘净值任务。完整说明见 [Agent 回测实验台](agent-backtest-workbench.md)。
+`/api/v1/agent-backtest` 是新增的多操盘手纸面交易实验 API，面向 A 股关注列表默认创建短线 / 中线 / 长线三个隔离 profile，也支持后续追加新的 active profile，例如更激进的短线交易员。它不替代上面的历史建议回测，而是记录每个操盘手何时加入实验、在某个时间点看到的证据、决策、订单、成交和每日净值。默认约束包括 6 位 A 股代码、100 股整数手、T+1 卖出校验、买入现金校验，以及独立组合账户落账。实验股票池与持仓解耦：看盘研究全集等于关注池加所有 active 操盘手账户持仓标的，所有 profile 获得同一份 `symbol_facts`（行情、技术、基本面、资讯、情绪层），但上下文只暴露去归属的 `portfolio_held_symbols`；已移出股票池但仍由当前 profile 持有的标的会作为 `exit_only_symbols` 允许持有、减仓或卖出，其他 profile 持有但当前 profile 未持有且不在关注池的标的仅作为 `research_only_symbols` 提供市场观察，不作为买入候选。Web 前端入口为独立页面 `/agent-backtest`（“操盘”），可用每日 16:00 后净值快照对比各操盘手收益曲线、资金曲线、当前权益、策略版本、加入时间、最新决策和事件流。Codex 自动化可通过 `python scripts/install_agent_backtest_codex_automations.py --run-id <id>` 注册 `0940看盘`、`1030看盘`、`1120看盘`、`1335看盘`、`1440看盘` 五次看盘和 16:05 `收盘复盘`；收盘复盘记录净值、生成操盘手自评，并在有稳定复盘结论时写入前向策略版本。完整说明见 [Agent 回测实验台](agent-backtest-workbench.md)。
+
+尾盘战术台也提供 Codex Desktop 自动复盘入口：`python scripts/install_tail_tactics_codex_automation.py` 会注册 `dsa-tail-tactics-midday-review`，在每个 A 股工作日 `11:30` 复盘上一交易日已评分且未复盘的尾盘实验。任务通过 `scripts/run_tail_tactics_codex_review.py prepare-review` 拉取/保存早盘指标并生成 Codex 上下文，再由 Codex 生成复盘并用 `apply-review` 写回实验。复盘中的第二层 Agent 评分/预测校准会沉淀到本地记忆并注入后续评分；第一层同花顺筛选调整只作为待确认建议。完整说明见 [尾盘战术台说明](tail-tactics-workbench.md)。
 
 ---
 
 ## 本地 WebUI 管理界面
 
-WebUI 与 FastAPI API 服务共用同一服务进程，启动后可在浏览器中完成配置管理、手动分析、任务进度查看、历史报告、回测、持仓管理和智能导入等操作。**尾盘战术台**（`/tail-tactics`）用于策略版本、实验登记与 Agent 逐票评分/复盘串联，详见 [尾盘战术台说明](tail-tactics-workbench.md)。**操盘**独立页面（`/agent-backtest`，`/trading` 会跳转到该页）用于查看短/中/长三个隔离操盘手的纸面交易实验，详见 [Agent 回测实验台](agent-backtest-workbench.md)。认证、云服务器访问和 API 调用细节见下方说明。
+WebUI 与 FastAPI API 服务共用同一服务进程，启动后可在浏览器中完成配置管理、手动分析、任务进度查看、历史报告、回测、持仓管理和智能导入等操作。**尾盘战术台**（`/tail-tactics`）用于策略版本、实验登记与 Agent 逐票评分/复盘串联，详见 [尾盘战术台说明](tail-tactics-workbench.md)。**操盘**独立页面（`/agent-backtest`，`/trading` 会跳转到该页）用于查看默认短/中/长以及后续新增隔离操盘手的纸面交易实验，详见 [Agent 回测实验台](agent-backtest-workbench.md)。认证、云服务器访问和 API 调用细节见下方说明。
 
 ### FastAPI API 服务
 
@@ -1067,6 +1069,10 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 | `/api/v1/backtest/performance` | GET | 获取整体回测表现 |
 | `/api/v1/backtest/performance/{code}` | GET | 获取单股回测表现 |
 | `/api/v1/agent-backtest/runs` | POST / GET | 创建或查询多操盘手纸面交易实验 |
+| `/api/v1/agent-backtest/runs/{run_id}` | GET / PATCH | 获取实验详情；维护观察股票池和每日允许复盘决策次数 |
+| `/api/v1/agent-backtest/runs/{run_id}/profiles` | POST | 新增隔离操盘手 profile，并创建独立组合账户与初始策略版本 |
+| `/api/v1/agent-backtest/runs/{run_id}/profiles/{profile_key}` | DELETE | 将操盘手 profile 标记为 inactive，保留历史但停止后续自动化处理 |
+| `/api/v1/agent-backtest/runs/{run_id}/profiles/{profile_key}/policies` | GET / POST | 只读浏览策略版本历史；或追加一个只影响未来决策的新策略版本 |
 | `/api/v1/agent-backtest/runs/{run_id}/observations` | POST | 记录一次受限看盘 |
 | `/api/v1/agent-backtest/runs/{run_id}/decisions` | POST | 记录一次操盘手决策 |
 | `/api/v1/agent-backtest/runs/{run_id}/orders` | POST | 创建模拟订单 |

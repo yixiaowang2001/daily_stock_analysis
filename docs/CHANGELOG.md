@@ -13,9 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [新功能] 新增 Agent 回测实验 API：支持为 A 股关注列表创建短线/中线/长线三个隔离操盘手账户，记录观察、决策、订单、成交、策略版本演进与每日净值，并在成交落账时执行 100 股整数手、T+1 卖出和买入现金校验。
 - [新功能] 新增 Codex 专用 Agent 回测 runner：`scripts/run_agent_backtest_cycle.py` 可创建实验、生成短/中/长隔离决策上下文、写回 Codex 决策、记录订单成交并生成每日净值快照。
-- [新功能] 新增 Codex 自动化操盘任务，按 09:40、13:30、14:40 触发三操盘手隔离复盘，并在 16:05 记录收盘净值；保留本地 Codex CLI 定时脚本作为备用方案。
+- [新功能] 新增 Codex 自动化操盘任务，按 `0940看盘`、`1030看盘`、`1120看盘`、`1335看盘`、`1440看盘` 触发三操盘手隔离复盘，并在 16:05 `收盘复盘` 记录净值与自评；保留本地 Codex CLI 定时脚本作为备用方案。
+- [修复] Agent 回测收盘净值支持实时价覆盖并在持仓 payload 中标记 `valuation_date`、`valuation_source` 与 `valuation_stale`，避免当日日线未落库时误用前一交易日收盘价排名。
+- [修复] Agent 回测收盘净值只处理 active profile，避免已停用操盘手的 inactive 组合账户导致整轮 `daily-nav` 失败。
+- [修复] 本地 Codex CLI 备用调度在 `close` 阶段同样传入 `--live-data`，并按 cycle 输出的 active profile context 列表执行，不再写死三份默认上下文。
 - [新功能] 新增 `scripts/install_agent_backtest_codex_automations.py`，clone 后可把“操盘”早盘、午盘、尾盘和收盘净值任务注册到当前用户的 Codex Desktop 自动化配置。
 - [新功能] Web 端新增独立“操盘”页面 `/agent-backtest`，支持浅色/深色模式，用每日 16:00 后净值快照展示三操盘手收益曲线、当前权益、策略版本、最新决策和事件流。
+- [改进] 操盘页面收益曲线区新增“收益率 / 账户权益”切换，可直接查看三操盘手的资金曲线。
+- [改进] 操盘页面强化夜间模式可读性，移除手动记录收盘净值入口，长决策文本改为点击文本静默展开/收起，并将实验股票池与每日允许复盘决策次数恢复为只读观测信息。
+- [改进] 操盘页面观察股票池展示股票代码与名称，不再提供页面内编辑和保存设置入口。
+- [新功能] Agent 回测支持后续新增隔离操盘手 profile，操盘页展示每个操盘手加入时间，并可引入激进短线等扩展风格。
+- [改进] Agent 回测支持将操盘手 profile 标记为 inactive；操盘页和 Codex runner 只处理 active profile，操盘手卡片可点击打开居中详情弹窗查看当前持仓、建仓均价、当前价与浮动涨跌。
+- [改进] Agent 回测 Codex runner 将关注池与持仓解耦：已移出股票池但仍持有的标的会作为 `exit_only_symbols` 继续进入对应操盘手上下文，可持有、减仓或卖出，但不会作为重新买入候选。
+- [改进] Agent 回测 Codex runner 将看盘数据升级为 profile-neutral 统一事实包：研究全集覆盖关注池与所有 active 操盘手持仓标的，每个 profile 获得同一份行情、技术、基本面、资讯和情绪层 `symbol_facts`，再由短/中/长策略自行选择权重。
+- [改进] Agent 回测 Codex 自动化调整为 09:40、10:30、11:20、13:35、14:40 五次看盘决策和 16:05 收盘复盘；每次看盘允许 `observe` / `hold`，不要求操盘手必须交易，收盘复盘可将操盘手自评沉淀为前向策略版本。
+- [改进] 操盘手详情弹窗加宽并将持仓明细改为横向表格，默认展示最新策略正文，支持只读切换历史策略版本，并新增历史决策模块与彩色决策动作标签。
+- [改进] 操盘手详情弹窗新增左右侧切换按钮与键盘方向键切换，打开详情后可连续浏览所有 active 操盘手。
+- [修复] 操盘手详情弹窗策略版本按钮与下拉菜单改为小字号，并修正夜间模式下选中项白底过亮。
 - [文档] 新增 Agent 回测实验台说明，并在完整指南中补充 `/api/v1/agent-backtest` 接口入口与示例。
 - [文档] 完善 DSA Agent Skill 接入说明，明确 `dsa-stock-analysis`、`dsa-watchlist-daily-review`、`dsa-candidate-lab`、`tail-picking-agent` 与“操盘”Codex 自动化的边界。
 - [测试] 新增 Agent 回测服务与 runner 单元测试，覆盖隔离账户创建、上下文隔离、每日观察次数限制、A 股整数手/T+1 约束、策略版本演进和决策写回。
@@ -26,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [chore] 新增仓库级 `dsa-watchlist-daily-review` skill，用于收盘后关注列表自动化复盘，复用 DSA 事实采集与 A 股分钟证据，按短线/中线/长线输出排序、建仓、目标和止损区间。
 - [改进] `dsa-stock-analysis` skill 支持从任意工作目录采集股票事实、逐票分析小批量非策略股票，并通过 `agent_note` 将短中长线观点、支撑/压力/跌破位和数据截点保存到分析历史。
 - [新功能] 尾盘战术台「策略与案例」合并原策略版本与案例库；策略版本 / 实验支持表格内查看（`ModalDialog` 悬浮窗）与删除；新增 `DELETE /api/v1/tail-tactics/strategy-versions/{id}`（有实验引用时 409）。
+- [新功能] 新增尾盘战术台 Codex 11:30 自动复盘：可注册本地 recurring automation，自动查找上一交易日已评分尾盘实验、补早盘指标、生成复盘上下文并写回复盘结果。
+- [改进] 尾盘战术台支持第二层 Agent 自迭代校准：复盘 `layer2_calibration_notes` 会沉淀为本地校准记忆并注入后续评分；第一层同花顺筛选调整只记录为待用户确认建议。
 - [新功能] 尾盘战术台新增候选池事实包：`GET /api/v1/tail-tactics/experiments/{id}/candidate-facts` 返回 DB-first 的 T 日日线、衍生特征、T+1 早盘指标缺口与数据新鲜度，评分 compose 自动注入该证据层供 Agent 独立判断。
 - [改进] 尾盘候选事实包在交易日尾盘评分窗口会尝试补充 14:40 前 1 分钟 K 证据，按 AkShare Eastmoney 历史分钟、AkShare 分钟缓存、efinance 历史分钟顺序 fail-open 回退，并记录每个数据源的成功/失败原因；分钟证据同步输出量能字段和尾盘 5 分钟量能派生指标，供 `price_volume` / `liquidity` 评分使用。
 - [新功能] 尾盘评分 compose 会将交给 Agent 的 `candidate_facts` 持久化到 `tail_candidate_fact_snapshot`，并提供 `GET /api/v1/tail-tactics/experiments/{id}/candidate-fact-snapshots` 追踪当时证据快照。

@@ -99,6 +99,25 @@ class AgentBacktestRepository:
             if own_session:
                 session.close()
 
+    def list_policies(
+        self,
+        *,
+        profile_id: int,
+        session: Optional[Any] = None,
+    ) -> List[AgentBacktestPolicyVersion]:
+        own_session = session is None
+        session = session or self.db.get_session()
+        try:
+            rows = session.execute(
+                select(AgentBacktestPolicyVersion)
+                .where(AgentBacktestPolicyVersion.profile_id == profile_id)
+                .order_by(desc(AgentBacktestPolicyVersion.created_at), desc(AgentBacktestPolicyVersion.id))
+            ).scalars().all()
+            return list(rows)
+        finally:
+            if own_session:
+                session.close()
+
     def count_observations(
         self,
         *,

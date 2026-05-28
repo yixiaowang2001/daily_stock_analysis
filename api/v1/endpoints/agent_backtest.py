@@ -21,11 +21,15 @@ from api.v1.schemas.agent_backtest import (
     AgentBacktestObservationItem,
     AgentBacktestOrderCreateRequest,
     AgentBacktestOrderItem,
+    AgentBacktestProfileCreateRequest,
     AgentBacktestPolicyCreateRequest,
     AgentBacktestPolicyItem,
+    AgentBacktestPolicyListResponse,
+    AgentBacktestProfileItem,
     AgentBacktestRunCreateRequest,
     AgentBacktestRunItem,
     AgentBacktestRunListResponse,
+    AgentBacktestRunUpdateRequest,
 )
 from api.v1.schemas.common import ErrorResponse
 from src.services.agent_backtest_service import AgentBacktestError, AgentBacktestService
@@ -128,6 +132,73 @@ def get_run(
         raise _not_found_or_bad_request(exc)
     except Exception as exc:
         raise _internal_error("Get agent backtest run failed", exc)
+
+
+@router.patch(
+    "/runs/{run_id}",
+    response_model=AgentBacktestRunItem,
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Update mutable agent backtest run settings",
+)
+def update_run(
+    run_id: int,
+    request: AgentBacktestRunUpdateRequest,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> AgentBacktestRunItem:
+    try:
+        data = _service(db_manager).update_run_settings(
+            run_id=run_id,
+            symbols=request.symbols,
+            max_observations_per_day=request.max_observations_per_day,
+        )
+        return AgentBacktestRunItem(**data)
+    except AgentBacktestError as exc:
+        raise _not_found_or_bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Update agent backtest run failed", exc)
+
+
+@router.post(
+    "/runs/{run_id}/profiles",
+    response_model=AgentBacktestProfileItem,
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Add one isolated agent profile to a run",
+)
+def add_profile(
+    run_id: int,
+    request: AgentBacktestProfileCreateRequest,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> AgentBacktestProfileItem:
+    try:
+        data = _service(db_manager).add_profile(
+            run_id=run_id,
+            profile=request.dict(),
+        )
+        return AgentBacktestProfileItem(**data)
+    except AgentBacktestError as exc:
+        raise _not_found_or_bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Add agent backtest profile failed", exc)
+
+
+@router.delete(
+    "/runs/{run_id}/profiles/{profile_key}",
+    response_model=AgentBacktestRunItem,
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Deactivate one isolated agent profile in a run",
+)
+def deactivate_profile(
+    run_id: int,
+    profile_key: str,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> AgentBacktestRunItem:
+    try:
+        data = _service(db_manager).deactivate_profile(run_id=run_id, profile_key=profile_key)
+        return AgentBacktestRunItem(**data)
+    except AgentBacktestError as exc:
+        raise _not_found_or_bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Deactivate agent backtest profile failed", exc)
 
 
 @router.post(
@@ -283,6 +354,26 @@ def evolve_policy(
         raise _not_found_or_bad_request(exc)
     except Exception as exc:
         raise _internal_error("Append policy version failed", exc)
+
+
+@router.get(
+    "/runs/{run_id}/profiles/{profile_key}/policies",
+    response_model=AgentBacktestPolicyListResponse,
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="List policy versions for read-only browsing",
+)
+def list_policies(
+    run_id: int,
+    profile_key: str,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> AgentBacktestPolicyListResponse:
+    try:
+        data = _service(db_manager).list_policies(run_id=run_id, profile_key=profile_key)
+        return AgentBacktestPolicyListResponse(**data)
+    except AgentBacktestError as exc:
+        raise _not_found_or_bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("List policy versions failed", exc)
 
 
 @router.post(

@@ -4,11 +4,43 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_LAYER2_CALIBRATION_PATH = REPO_ROOT / ".claude" / "reviews" / "tail_tactics" / "layer2_calibration.md"
 
 
 def _session_id_for_experiment(experiment_id: int) -> str:
     return f"tail_exp_{experiment_id}"
+
+
+def get_tail_layer2_calibration_path() -> Path:
+    """Return the local Layer 2 calibration memory path."""
+
+    override = (os.getenv("TAIL_LAYER2_CALIBRATION_PATH") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return DEFAULT_LAYER2_CALIBRATION_PATH
+
+
+def load_tail_layer2_calibration(*, max_chars: int = 6000) -> Optional[str]:
+    """Load local Agent evaluation calibration notes for tail-session scoring."""
+
+    path = get_tail_layer2_calibration_path()
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
 
 
 def build_ranking_compose(
@@ -20,6 +52,7 @@ def build_ranking_compose(
 ) -> Dict[str, Any]:
     symbols: List[str] = list(experiment.get("symbols") or [])
     primary = symbols[0] if symbols else ""
+    layer2_calibration = load_tail_layer2_calibration()
     bundle: Dict[str, Any] = {
         "mode": "score",
         "experiment_id": experiment_id,
@@ -32,6 +65,7 @@ def build_ranking_compose(
         "pasted_raw": experiment.get("pasted_raw"),
         "param_snapshot": experiment.get("param_snapshot"),
         "candidate_facts": candidate_facts,
+        "layer2_calibration": layer2_calibration,
     }
     message = (
         "请根据系统补充的「尾盘候选逐票评分任务」和 `candidate_facts` 事实包进行评分。"
@@ -39,6 +73,8 @@ def build_ranking_compose(
         "只用于解释这些股票为什么进入候选池；第二层才是 Agent 的「评估/预测规则」，"
         "用于逐票评分、风险闸门、动作级别和次日开盘预测。不要把 `watch/candidate/priority`、"
         "`next_open_forecast` 或风险扣分反向混入第一层同花顺筛选条件。"
+        "如果上下文中存在「Layer 2 自迭代校准记忆」，必须作为第二层评分/预测的经验校准使用；"
+        "它不能改变第一层同花顺候选池筛选条件。"
         "DSA 提供的是证据层，不是最终结论；你需要独立判断数据缺口、信号冲突、"
         "风险闸门和每只股票是否通过阈值。仅在事实包缺失或明显过期时再使用工具补充行情、"
         "K 线、技术与舆情等数据，且补充数据必须受 `selection_cutoff` 约束；"
@@ -88,6 +124,7 @@ def build_review_compose(
 ) -> Dict[str, Any]:
     symbols: List[str] = list(experiment.get("symbols") or [])
     primary = symbols[0] if symbols else ""
+    layer2_calibration = load_tail_layer2_calibration()
     bundle: Dict[str, Any] = {
         "mode": "review",
         "experiment_id": experiment_id,
@@ -100,6 +137,7 @@ def build_review_compose(
         "morning_metrics": morning_metrics,
         "symbols": symbols,
         "primary_symbol": primary,
+        "layer2_calibration": layer2_calibration,
     }
     message = (
         "请根据系统补充的「次日早盘复盘任务」：结合前一日的评分结论、"
@@ -107,9 +145,12 @@ def build_review_compose(
         "输出详细复盘：哪些预测命中/未命中、可能原因、对策略的改进建议。"
         "复盘建议必须分清：是第一层同花顺候选池筛选条件需要调整，"
         "还是第二层 Agent 评估/预测权重需要调整；不要把二者混写。"
+        "第一层修改只能作为待用户确认的建议提出，不能自动应用；"
+        "第二层校准请输出为可自我迭代的经验 notes，后续评分会自动读取。"
         "结尾请给出可写入案例库的 `case_summary`（一句话）建议，"
         "并放在一段 JSON 中，根对象键名固定为 `tail_review_suggestions`，"
-        "仅包含 `case_summary` 字段。"
+        "至少包含 `case_summary` 字段；如有二层校准，加入 `layer2_calibration_notes` 字符串数组；"
+        "如认为第一层同花顺筛选条件需要调整，加入 `layer1_change_requests` 字符串数组。"
     )
     context: Dict[str, Any] = {
         "stock_code": primary,
@@ -151,12 +192,22 @@ def format_tail_ranking_context_message(bundle: Dict[str, Any]) -> str:
                 json.dumps(candidate_facts, ensure_ascii=False, indent=2),
             ]
         )
+    layer2_calibration = bundle.get("layer2_calibration")
+    if layer2_calibration:
+        lines.extend(
+            [
+                "",
+                "## Layer 2 自迭代校准记忆（仅用于 Agent 评估/预测，不改变同花顺选股层）",
+                str(layer2_calibration).strip(),
+            ]
+        )
     lines.extend(
         [
             "",
             "## 输出要求",
             "- 必须区分两层：第一层「尾盘选股策略」负责候选池生成，第二层「Agent 评估/预测策略」负责评分、风险闸门、动作级别和开盘预测。",
             "- 不要把第二层的 `watch/candidate/priority`、`next_open_forecast` 或风险扣分反向混入第一层同花顺筛选条件；策略修改建议要注明影响哪一层。",
+            "- 如果有 Layer 2 自迭代校准记忆，必须用于第二层评分、目标区间和风险闸门校准；不得把它写成第一层同花顺筛选条件。",
             "- 优先使用 `candidate_facts` 中的结构化事实；事实缺失或过期时再使用工具补充，禁止编造行情数字。",
             "- `selection_cutoff_evidence.fields` 里的分钟价格和分钟量能要一起看；分钟量能字段应进入 `price_volume` / `liquidity` 判断，避免只看价格位置。",
             "- 打分只能基于 `selection_cutoff` 及之前可观察数据；T 日收盘价、全天最高价、收盘成交额等盘后字段只能作为复盘参考，不得用于评分。",
@@ -190,13 +241,24 @@ def format_tail_review_context_message(bundle: Dict[str, Any]) -> str:
         "## 次日早盘冲高（相对昨收 %；自动拉取为 9:30–10:01 五分钟 K 或日线回退）",
         json.dumps(bundle.get("morning_metrics") or [], ensure_ascii=False, indent=2),
     ]
+    layer2_calibration = bundle.get("layer2_calibration")
+    if layer2_calibration:
+        lines.extend(
+            [
+                "",
+                "## 已有 Layer 2 自迭代校准记忆（复盘后可继续补充）",
+                str(layer2_calibration).strip(),
+            ]
+        )
     lines.extend(
         [
             "",
             "## 输出要求",
             "- 对比预测与结果，说明评分口径。",
             "- 复盘建议必须分清：是第一层同花顺候选池筛选条件需要调整，还是第二层 Agent 评估/预测权重需要调整。",
-            "- 结尾 JSON 块包含 `tail_review_suggestions`（仅含 case_summary）。",
+            "- 第一层同花顺筛选条件的变化只能写入 `layer1_change_requests`，等待用户确认；不要自动应用。",
+            "- 第二层 Agent 评估/预测的经验校准写入 `layer2_calibration_notes`，后续评分会自动读取。",
+            "- 结尾 JSON 块包含 `tail_review_suggestions`，至少含 `case_summary`；可选 `layer2_calibration_notes` 与 `layer1_change_requests`。",
         ]
     )
     return "\n".join(lines)
