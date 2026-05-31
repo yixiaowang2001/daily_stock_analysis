@@ -101,7 +101,12 @@ class RealtimeSource(Enum):
     TENCENT = "tencent"             # 腾讯直连
     SINA = "sina"                   # 新浪直连
     STOOQ = "stooq"                 # Stooq 美股兜底
+    IBKR = "ibkr"                   # Interactive Brokers Gateway（美股行情/日线）
     LONGBRIDGE = "longbridge"       # 长桥（美股/港股兜底）
+    ALPHA_VANTAGE = "alpha_vantage" # Alpha Vantage 美股兜底
+    FINNHUB = "finnhub"             # Finnhub 美股兜底
+    TWELVE_DATA = "twelvedata"      # Twelve Data 美股兜底
+    MASSIVE = "massive"             # Massive/Polygon 美股兜底
     IWENCAI = "iwencai"             # 同花顺问财 OpenAPI（低优先级兜底）
     FALLBACK = "fallback"           # 降级兜底
 

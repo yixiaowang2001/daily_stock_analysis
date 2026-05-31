@@ -45,12 +45,23 @@ The script wraps `.claude/skills/dsa-stock-analysis/scripts/collect_stock_contex
 
 When `IWENCAI_API_KEY` is configured, the base collector can use 同花顺问财 as the final realtime quote/search fallback. Because all Iwencai skill calls share a small daily quota, treat `quote.source == "iwencai"` or `news.provider == "Iwencai"` as fallback evidence and surface it in the missing-data/source summary. Iwencai fallback does not replace missing daily K-line or minute evidence.
 
+### Codex External Research Fallback
+
+The base collector emits per-symbol `codex_research_fallback`. The watchlist collector also marks `minute_evidence_missing` when after-close minute evidence is unavailable. When those flags are present, Codex should use its own web/browser/finance research tools to supplement public facts needed for the review.
+
+- News/search fallback covers Bocha, SearXNG, Tavily, Brave, SerpAPI, MiniMax, Anspire, and Iwencai failures or empty filtered results.
+- Stock-data fallback may cover realtime/delayed quotes, recent daily or intraday price/volume context, company announcements, and public fundamentals.
+- Fallback facts must be labeled as `Codex 外部兜底`, with source names/URLs where available, retrieval time, and the effective market cutoff.
+- Do not let Codex fallback silently erase DSA data gaps: `post_close_intraday_evidence.available=false`, missing `daily`, or failed search providers still belong in the source/missing-data summary.
+- For after-close reviews, keep the A-share `15:00` cutoff discipline. Later facts can be mentioned only as post-cutoff context, not as evidence that was observable at the cutoff.
+
 For each symbol, inspect:
 
 - `quote`, `daily.latest`, `daily.recent`, `trend`, `chip`, `fundamental_context`, `capital_flow_context`
 - `news.results` when available
 - `latest_reports` for stale or prior Agent/DSA views
 - `post_close_intraday_evidence.fields` for A-share minute price/volume evidence such as last close, pre-cutoff high/low, last 5-minute return, and volume ratio
+- `codex_research_fallback` to decide whether Codex should supplement missing news or stock facts before final ranking
 
 ## Judgment And Ranking
 
@@ -84,6 +95,7 @@ For prices and levels:
 Answer in Chinese by default when the user writes Chinese. Put the watchlist summary first:
 
 - `数据截点`: generated time, trade date, latest daily date, minute cutoff, and missing-data summary.
+- `Codex兜底`: which symbols required/used external fallback and which gaps remain unresolved.
 - `短线排序`: rank, code/name, score, action, entry zone, target zone, stop/invalidation, one-line reason.
 - `中线排序`: same columns, using medium-horizon judgment; `entry_zone` must be the 1-4 week build/add zone, not a copied short-term buy zone.
 - `长线排序`: same columns, using long-horizon judgment; `entry_zone` must be the quarterly staged build zone or `等待深回撤/无法可靠给出`.
@@ -153,7 +165,8 @@ Use the `dsa-stock-analysis` note shape and include watchlist-specific fields in
     "medium_rank": 5,
     "long_rank": 8,
     "collector_generated_at": "2026-05-25T08:20:00Z",
-    "minute_source": "akshare_hist_min_em_1m"
+    "minute_source": "akshare_hist_min_em_1m",
+    "codex_research_fallback": "needed/used/external sources if any"
   },
   "analysis_summary": "一句话摘要",
   "risk_warning": "最关键风险",

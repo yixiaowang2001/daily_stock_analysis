@@ -124,6 +124,10 @@ def _compact_fundamental_context(fundamental_context: dict) -> dict:
         "status": fundamental_context.get("status"),
         "coverage": fundamental_context.get("coverage", {}),
     }
+    if fundamental_context.get("snapshot_semantics"):
+        compact["snapshot_semantics"] = fundamental_context.get("snapshot_semantics")
+    if fundamental_context.get("retrieved_at"):
+        compact["retrieved_at"] = fundamental_context.get("retrieved_at")
     for block in blocks:
         payload = fundamental_context.get(block, {})
         if isinstance(payload, dict):

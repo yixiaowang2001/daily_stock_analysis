@@ -858,6 +858,10 @@ class Config:
     fundamental_stage_timeout_seconds: float = 1.5
     # 单能力源调用超时（秒）
     fundamental_fetch_timeout_seconds: float = 0.8
+    # 美股基本面阶段总预算（秒）；远程 provider 比 A 股本地聚合更慢，单独配置避免拖慢 A 股默认路径
+    us_fundamental_stage_timeout_seconds: float = 4.0
+    # 美股基本面单 provider 调用超时（秒）
+    us_fundamental_fetch_timeout_seconds: float = 3.0
     # 单能力失败重试次数（已包含首次）
     fundamental_retry_max: int = 1
     # 基本面上下文短 TTL（秒）
@@ -1581,6 +1585,18 @@ class Config:
                 os.getenv('FUNDAMENTAL_FETCH_TIMEOUT_SECONDS'),
                 0.8,
                 field_name='FUNDAMENTAL_FETCH_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            us_fundamental_stage_timeout_seconds=parse_env_float(
+                os.getenv('US_FUNDAMENTAL_STAGE_TIMEOUT_SECONDS'),
+                4.0,
+                field_name='US_FUNDAMENTAL_STAGE_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            us_fundamental_fetch_timeout_seconds=parse_env_float(
+                os.getenv('US_FUNDAMENTAL_FETCH_TIMEOUT_SECONDS'),
+                3.0,
+                field_name='US_FUNDAMENTAL_FETCH_TIMEOUT_SECONDS',
                 minimum=0.0,
             ),
             fundamental_retry_max=parse_env_int(os.getenv('FUNDAMENTAL_RETRY_MAX'), 1, field_name='FUNDAMENTAL_RETRY_MAX', minimum=0),

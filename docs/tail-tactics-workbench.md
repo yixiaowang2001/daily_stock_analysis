@@ -27,7 +27,7 @@
 |------|------|
 | `tail_strategy_version` | 策略版本：`version_label`、`title`、Markdown 正文 `body_markdown`、可选 `parent_version_id` 便于追溯 |
 | `tail_experiment` | 单次实验：`trade_date`（T 日）、关联策略版本、粘贴原文 `pasted_raw`、`symbols_json`（有序，≤10）、`param_snapshot_json`（风控模式、持有/验证周期、硬排除条件、评分权重、当日市场上下文、`data_cutoff_time` 等对话快照）、`ranking_session_id` / `ranking_output`（兼容旧字段名，当前保存评分输出）、`review_note_markdown`、`case_summary`、`status`（如 `draft` / `ranked` / `closed`）；历史库中可能仍存在 `tags_json` 列，当前产品不再读写 |
-| `tail_morning_metric` | 次日早盘指标：按 `(experiment_id, symbol)` 唯一；`surge_pct_prev_close_930_1000` 为冲高幅度（%），`source` 区分 `akshare_5m_em_0930_1000`（东方财富 5 分钟 K 窗口）、`daily_high_t1_fallback:*`（分钟缺失时日线最高回退）、`manual` / `skipped_non_cn` 等 |
+| `tail_morning_metric` | 次日早盘指标：按 `(experiment_id, symbol)` 唯一；`surge_pct_prev_close_930_1000` 为冲高幅度（%），`source` 区分 `akshare_5m_em_0930_1000`（东方财富 5 分钟 K 窗口）、`akshare_stock_zh_a_minute_1m_0930_1001` / `efinance_quote_history_1m_0930_1001`（共享 1 分钟多源 fallback）、`daily_high_t1_fallback:*`（分钟缺失时日线最高回退）、`manual` / `skipped_non_cn` 等 |
 | `tail_candidate_fact_snapshot` | 候选池事实包快照：记录每次评分 compose 实际交给 Agent 的 `candidate_facts`、`kind`、`generated_at` 与数据新鲜度摘要；用于复盘“当时模型看到了什么证据”，而不是存储评分结论 |
 
 ## REST API 概要
@@ -118,7 +118,7 @@ python scripts/install_tail_tactics_codex_automation.py
 python scripts/run_tail_tactics_codex_review.py prepare-review
 ```
 
-该 runner 会解析上一 A 股交易日、查找最新未复盘且已有 `ranking_output` 的 `tail_experiment`、自动拉取并保存早盘 9:30-10:00 冲高指标，然后在 `.claude/reviews/tail_tactics/<trade_date>/` 下生成 `exp_<id>_review_context.md/json`。Codex 读取上下文生成中文复盘后，再通过：
+该 runner 会解析上一 A 股交易日、查找最新未复盘且已有 `ranking_output` 的 `tail_experiment`、自动拉取并保存早盘 9:30-10:00 冲高指标，然后在 `.claude/reviews/tail_tactics/<trade_date>/` 下生成 `exp_<id>_review_context.md/json`。如果库里已有 `no_t1_bar`、`error:*` 或空冲高值等不完整指标，runner 默认会重新拉取，避免一次临时数据源失败永久污染复盘样本。Codex 读取上下文生成中文复盘后，再通过：
 
 ```bash
 python scripts/run_tail_tactics_codex_review.py apply-review --experiment-id <id> --review-file <review_md_file>
@@ -134,7 +134,7 @@ python scripts/run_tail_tactics_codex_review.py apply-review --experiment-id <id
 
 ## 已知限制（P0）
 
-- 自动拉取依赖 **外网** 与 **AkShare / efinance / 项目日线数据源**；代理异常、停牌、历史过久导致分钟接口无数据时，尾盘评分事实包会保留 `fallback_attempts`，早盘指标会回退 **日线最高价**（非严格 10:00 窗口），响应 `notes` 与每条 `source` 会标明。
+- 自动拉取依赖 **外网** 与 **AkShare / efinance / 项目日线数据源**；代理异常、停牌、历史过久导致主分钟接口无数据时，尾盘评分事实包会保留 `fallback_attempts`，早盘指标会先尝试共享 1 分钟多源 fallback，再回退 **日线最高价**（非严格 10:00 窗口），响应 `notes` 与每条 `source` 会标明。
 - 案例在 **策略与案例** 页以表格浏览；全文检索与更复杂筛选可后续扩展。
 
 ## 相关代码路径

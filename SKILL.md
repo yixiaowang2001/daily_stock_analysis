@@ -1,5 +1,5 @@
 ---
-name: "stock_analyzer"
+name: "stock-analyzer"
 description: "分析股票和市场。当用户想要分析单个或多个股票，或进行市场复盘时调用。"
 ---
 
@@ -8,6 +8,10 @@ description: "分析股票和市场。当用户想要分析单个或多个股票
 本技能基于 `analyzer_service.py` 的逻辑，提供分析股票和整体市场的功能。
 
 > 仓库级 Agent Skill 的分工与接入方式见 [`docs/agent-skill-integration.md`](docs/agent-skill-integration.md)。本文件属于产品 / 外部集成说明，不是仓库 AI 协作治理真源。
+
+## Codex 信息兜底
+
+DSA 自带数据源和搜索 provider 优先。若新闻搜索、行情、K 线、分钟证据或公开基本面获取失败，且当前执行方是 Codex，可由 Codex 用外部联网/浏览器/金融信息工具补充公开事实。外部补充必须标注为 `Codex 外部兜底`，写明来源、获取时间、数据截点和未验证缺口，不能伪装成 DSA provider 正常返回。
 
 ## 输出结构 (`AnalysisResult`)
 

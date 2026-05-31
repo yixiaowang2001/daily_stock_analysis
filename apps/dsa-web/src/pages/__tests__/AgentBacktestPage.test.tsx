@@ -100,6 +100,24 @@ const run = {
   profiles,
 };
 
+const usRun = {
+  ...run,
+  id: 9,
+  name: '美股现金账户实验',
+  market: 'us',
+  symbols: ['AAPL', 'NVDA'],
+  symbolNames: {
+    AAPL: 'Apple Inc.',
+    NVDA: 'NVIDIA Corp.',
+  },
+  initialCashPerAgent: 1000,
+  ruleVersion: 'us_cash_ibkr_v1',
+  config: {
+    baseCurrency: 'USD',
+    cashSettlement: 'T+1',
+  },
+};
+
 const events = {
   observations: [
     {
@@ -298,12 +316,39 @@ describe('AgentBacktestPage', () => {
     expect(screen.getAllByText(/验证日不交易/).length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: '记录收盘净值' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '保存设置' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('选择操盘实验')).not.toBeInTheDocument();
     expect(screen.getByText('博杰股份')).toBeInTheDocument();
     expect(screen.getByText('福晶科技')).toBeInTheDocument();
 
     await waitFor(() => {
+      expect(mockListRuns).toHaveBeenCalledWith({ market: 'cn', limit: 20 });
       expect(mockListEvents).toHaveBeenCalledWith(1, { limit: 300 });
     });
+  });
+
+  it('filters experiments by A-share or US market', async () => {
+    mockListRuns
+      .mockResolvedValueOnce({ items: [run], total: 1 })
+      .mockResolvedValueOnce({ items: [usRun], total: 1 });
+    mockGetRun
+      .mockResolvedValueOnce(run)
+      .mockResolvedValueOnce(usRun);
+
+    render(<AgentBacktestPage />);
+
+    await waitFor(() => {
+      expect(mockListRuns).toHaveBeenCalledWith({ market: 'cn', limit: 20 });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '美股' }));
+
+    await waitFor(() => {
+      expect(mockListRuns).toHaveBeenCalledWith({ market: 'us', limit: 20 });
+      expect(mockGetRun).toHaveBeenCalledWith(9);
+    });
+    expect((await screen.findAllByText(/美股现金账户实验/)).length).toBeGreaterThan(0);
+    expect(screen.getByText('Apple Inc.')).toBeInTheDocument();
+    expect(screen.getByText('NVIDIA Corp.')).toBeInTheDocument();
   });
 
   it('switches between return and account equity curves', async () => {

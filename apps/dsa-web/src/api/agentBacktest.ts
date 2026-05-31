@@ -13,6 +13,7 @@ import type {
 
 type RunListQuery = {
   status?: string;
+  market?: string;
   limit?: number;
 };
 
@@ -25,6 +26,9 @@ function buildRunListParams(query: RunListQuery): Record<string, string | number
   const params: Record<string, string | number> = {};
   if (query.status) {
     params.status = query.status;
+  }
+  if (query.market) {
+    params.market = query.market;
   }
   if (query.limit != null) {
     params.limit = query.limit;

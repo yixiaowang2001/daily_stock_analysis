@@ -45,7 +45,7 @@ Hard routing rule: a prompt like "尾盘选出来600783，评估一下" is not o
 - State the data cutoff, data source, and missing-data gaps before giving trade framing.
 - When the user provides cost basis or position details, calculate unrealized P/L and anchor the answer around risk control, not only trend direction.
 - Give conditional plans: keep/reduce/exit thresholds, invalidation levels, and what would change the view. Avoid absolute commands like "must buy" or "must sell".
-- For live-market questions, refresh data through DSA first. If DSA cannot fetch current facts, use reputable external sources or browser/web fallback and clearly label them.
+- For live-market questions, refresh data through DSA first. If DSA quote/K-line/search providers cannot fetch current facts, Codex may use reputable external sources or browser/web fallback and must clearly label them.
 - Keep DSA conclusions advisory. If a DSA report exists, read it as one evidence source, then independently check whether its conclusion follows from the facts.
 
 ## Mode Selection
@@ -83,6 +83,17 @@ The collector reuses DSA modules:
 - `SearchService` for optional news when search providers are configured.
 
 If `IWENCAI_API_KEY` is configured, DSA appends Iwencai as the last realtime quote/search fallback. Treat any `quote.source == "iwencai"` or `news.provider == "Iwencai"` as quota-limited fallback evidence from 同花顺问财, not as the primary data source. Do not hide the fallback source in the answer; mention it in `未验证` or the data source/cutoff line when it appears. Iwencai does not replace daily K-line data, so a missing `daily` block remains a data gap.
+
+### Codex External Research Fallback
+
+The collector emits `codex_research_fallback`. When it says `needed: true`, or when `news.available=false`, `news.success=false`, `news.results=[]`, `quote` is missing, or `daily.rows=0`, Codex should fill the gap with its own information-gathering tools when the task needs a current answer.
+
+- News/search fallback covers Bocha, SearXNG, Tavily, Brave, SerpAPI, MiniMax, Anspire, and Iwencai failures or empty filtered results. Use Codex web/browser research to find recent news, announcements, exchange filings, and reputable media.
+- Stock-data fallback may cover realtime/delayed quotes, recent K-line context, intraday price/volume checks, and public fundamentals when DSA providers fail.
+- Label fallback facts as `Codex 外部兜底`, cite source names/URLs when available, and include retrieval time plus market/data cutoff.
+- Keep fallback facts separate from DSA facts. Do not write Codex-gathered fallback values into DSA DB fields unless an existing repository workflow explicitly supports that storage path.
+- Respect time boundaries. For a question about a historical or intraday cutoff, do not use later facts as if they were observable then; if later facts are mentioned, label them as post-cutoff confirmation.
+- If Codex cannot verify a missing fact either, keep it in `未验证` instead of inventing it.
 
 After collection, analyze the returned JSON yourself. Use DSA's `trend.buy_signal`, `signal_score`, chip structure, valuation/earnings blocks, capital flow, and recent bars as evidence, not as final orders.
 
@@ -161,7 +172,8 @@ Use this JSON shape:
   "source_snapshot": {
     "collector_generated_at": "DSA facts generated_at",
     "daily_end_date": "latest K-line date",
-    "quote_time": "quote timestamp if available"
+    "quote_time": "quote timestamp if available",
+    "codex_research_fallback": "needed/used/external sources if any"
   },
   "agent_note": "最终给用户的中文研究笔记正文"
 }
@@ -192,7 +204,7 @@ Answer in Chinese by default when the user writes Chinese. Keep the structure co
 - `操作框架`: no-position and has-position scenarios for watch/entry/hold/reduce/exit.
 - `已保存`: record id/query id when persistence succeeds, or why it was not saved.
 - `风险`: what can break the view.
-- `未验证`: missing data or paths not run.
+- `未验证`: missing data, paths not run, and whether Codex external fallback was needed, used, or still unavailable.
 
 End with a short research-risk disclaimer. Do not ask the user to commit, push, tag, or publish anything while using this skill.
 

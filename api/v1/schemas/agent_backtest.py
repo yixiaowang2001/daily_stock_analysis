@@ -23,18 +23,19 @@ class AgentBacktestProfileCreateRequest(AgentBacktestProfileConfig):
 
 class AgentBacktestRunCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    symbols: List[str] = Field(..., min_length=1, description="A-share symbol list")
+    market: Literal["cn", "us"] = Field("cn", description="Market namespace for this isolated run")
+    symbols: List[str] = Field(..., min_length=1, description="Symbol list for the selected market")
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     initial_cash_per_agent: float = Field(20000.0, gt=0)
     max_observations_per_day: int = Field(5, ge=1, le=5)
-    rule_version: str = Field("cn_a_v1", min_length=1, max_length=32)
+    rule_version: Optional[str] = Field(None, min_length=1, max_length=32)
     config: Dict[str, Any] = Field(default_factory=dict)
     profiles: Optional[List[AgentBacktestProfileConfig]] = None
 
 
 class AgentBacktestRunUpdateRequest(BaseModel):
-    symbols: Optional[List[str]] = Field(None, min_length=1, description="A-share symbol list")
+    symbols: Optional[List[str]] = Field(None, min_length=1, description="Symbol list for the run market")
     max_observations_per_day: Optional[int] = Field(None, ge=1, le=5)
 
 

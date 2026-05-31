@@ -2,8 +2,10 @@
 """
 尾盘战术台：自动填充「次日早盘冲高 %」。
 
-口径：相对 **前一交易日收盘价**，取 T+1 日 **09:30–10:01** 内 5 分钟 K 的 **最高价** 计算冲高幅度（%）。
-优先 AkShare `stock_zh_a_hist_min_em`；分钟数据不可用时回退为 T+1 **日线最高价**（口径变宽，仍写入 source 区分）。
+口径：相对 **前一交易日收盘价**，取 T+1 日 **09:30–10:01** 内分钟 K 的 **最高价** 计算冲高幅度（%）。
+优先 AkShare `stock_zh_a_hist_min_em`；分钟数据不可用时复用尾盘 1 分钟多源
+fallback（AkShare 分钟缓存 / efinance）；仍不可用时回退为 T+1 **日线最高价**
+（口径变宽，仍写入 source 区分）。
 
 仅处理 A 股（6 位数字 / 经 normalize 后）；港股、美股跳过并记入 notes。
 """
@@ -19,6 +21,7 @@ import pandas as pd
 
 from data_provider.base import DataFetcherManager, normalize_stock_code
 from src.core.trading_calendar import get_market_for_stock, next_cn_trading_day_after
+from src.services.tail_intraday_fetch import fetch_tail_intraday_cutoff_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +91,46 @@ def _minute_window_surge(symbol: str, morning_d: date, prev_close: float) -> Tup
     return round(pct, 4), "akshare_5m_em_0930_1000"
 
 
+def _fallback_minute_window_surge(
+    symbol: str,
+    morning_d: date,
+    prev_close: float,
+) -> Tuple[Optional[float], str]:
+    """Fetch strict morning-window high via the shared 1-minute fallback chain."""
+
+    try:
+        payload = fetch_tail_intraday_cutoff_evidence(
+            symbol=symbol,
+            trade_date=morning_d,
+            selection_cutoff="10:01",
+            previous_close=prev_close,
+        )
+    except Exception as exc:
+        logger.info("tail morning: fallback minute %s: %s", symbol, exc)
+        return None, f"intraday_minute:{type(exc).__name__}"
+
+    if not payload.get("available"):
+        reason = str(payload.get("missing_reason") or "intraday_unavailable")
+        return None, reason
+
+    fields = payload.get("fields") or {}
+    pct = fields.get("pre_cutoff_high_pct")
+    if pct is None:
+        high = fields.get("pre_cutoff_high")
+        if high is None or prev_close <= 0:
+            return None, "intraday_high_missing"
+        pct = (float(high) / prev_close - 1.0) * 100.0
+    try:
+        pct_value = float(pct)
+    except (TypeError, ValueError):
+        return None, "intraday_high_nan"
+    if pd.isna(pct_value):
+        return None, "intraday_high_nan"
+
+    source = str(payload.get("source") or "intraday_1m")
+    return round(pct_value, 4), f"{source}_0930_1001"
+
+
 def _daily_high_fallback(manager: DataFetcherManager, symbol: str, morning_d: date, prev_close: float) -> Tuple[Optional[float], str]:
     try:
         df, src = manager.get_daily_data(symbol, days=40)
@@ -153,13 +196,29 @@ def auto_fetch_tail_morning_metrics(
             continue
 
         pct, src = _minute_window_surge(sym, m_date, prev_close)
+        primary_minute_source = src
         if pct is None:
+            pct2, src2 = _fallback_minute_window_surge(sym, m_date, prev_close)
+            pct, src = pct2, src2
+            if pct is not None:
+                notes.append(
+                    f"{sym}: 东财5分钟无数据，已用1分钟线回退（{src}；primary={primary_minute_source}）"
+                )
+
+        if pct is None:
+            intraday_source = src
             pct2, src2 = _daily_high_fallback(mgr, sym, m_date, prev_close)
             pct, src = pct2, src2
             if pct is None:
-                notes.append(f"{sym}: 分钟与日线回退均失败（{src}）")
+                notes.append(
+                    f"{sym}: 分钟与日线回退均失败（primary={primary_minute_source}; "
+                    f"intraday={intraday_source}; daily={src}）"
+                )
             else:
-                notes.append(f"{sym}: 分钟无数据，已用日线最高回退（{src}）")
+                notes.append(
+                    f"{sym}: 分钟无数据，已用日线最高回退（{src}；primary={primary_minute_source}; "
+                    f"intraday={intraday_source}）"
+                )
 
         items.append(
             {

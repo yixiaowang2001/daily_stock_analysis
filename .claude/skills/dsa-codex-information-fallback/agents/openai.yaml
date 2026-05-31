@@ -1,0 +1,4 @@
+interface:
+  display_name: "DSA Codex 资讯兜底"
+  short_description: "按数据截点补齐股票公告、新闻、情绪和公司事件证据。"
+  default_prompt: "Use $dsa-codex-information-fallback when DSA provider news or information context is skipped, failed, stale, or insufficient; collect public evidence under the data cutoff, label Codex external fallback sources, and summarize unresolved gaps."

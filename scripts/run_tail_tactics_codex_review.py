@@ -110,7 +110,8 @@ def _ensure_morning_metrics(
 ) -> Dict[str, Any]:
     experiment_id = int(experiment["id"])
     existing = db.list_tail_morning_metrics(experiment_id)
-    if existing and not force_auto_fetch:
+    should_retry_existing = _should_retry_morning_metrics(existing)
+    if existing and not force_auto_fetch and not should_retry_existing:
         return {
             "auto_fetch_attempted": False,
             "reason": "existing metrics kept",
@@ -124,7 +125,7 @@ def _ensure_morning_metrics(
             "auto_fetch_attempted": False,
             "reason": "auto_fetch disabled",
             "morning_trade_date": morning_trade_date.isoformat() if morning_trade_date else None,
-            "notes": [],
+            "notes": ["existing metrics are incomplete; auto_fetch disabled"] if should_retry_existing else [],
             "items": existing,
         }
 
@@ -136,11 +137,38 @@ def _ensure_morning_metrics(
         db.upsert_tail_morning_metrics(experiment_id, items)
     return {
         "auto_fetch_attempted": True,
-        "reason": "auto_fetch completed",
+        "reason": "auto_fetch completed; refreshed incomplete metrics" if should_retry_existing else "auto_fetch completed",
         "morning_trade_date": resolved_date.isoformat(),
         "notes": notes,
         "items": db.list_tail_morning_metrics(experiment_id),
     }
+
+
+def _should_retry_morning_metrics(metrics: List[Dict[str, Any]]) -> bool:
+    """Retry known incomplete auto-fetch rows instead of preserving stale gaps."""
+
+    if not metrics:
+        return False
+    retry_sources = {
+        "no_t1_bar",
+        "minute_empty",
+        "minute_high_nan",
+        "daily_high_empty",
+        "daily_high_nan",
+        "daily_high_t1_missing",
+        "intraday_pre_cutoff_fetch_failed",
+        "intraday_high_missing",
+        "intraday_high_nan",
+    }
+    for item in metrics:
+        source = str(item.get("source") or "").strip().lower()
+        if item.get("surge_pct_prev_close_930_1000") is None and source != "skipped_non_cn":
+            return True
+        if source.startswith(("error:", "daily_high_error:", "akshare_minute:", "intraday_minute:")):
+            return True
+        if source in retry_sources:
+            return True
+    return False
 
 
 def _render_context_markdown(payload: Dict[str, Any]) -> str:

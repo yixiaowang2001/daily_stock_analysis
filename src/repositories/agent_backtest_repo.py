@@ -33,11 +33,19 @@ class AgentBacktestRepository:
                 select(AgentBacktestRun).where(AgentBacktestRun.id == run_id).limit(1)
             ).scalar_one_or_none()
 
-    def list_runs(self, *, status: Optional[str] = None, limit: int = 50) -> List[AgentBacktestRun]:
+    def list_runs(
+        self,
+        *,
+        status: Optional[str] = None,
+        market: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[AgentBacktestRun]:
         with self.db.get_session() as session:
             query = select(AgentBacktestRun)
             if status:
                 query = query.where(AgentBacktestRun.status == status)
+            if market:
+                query = query.where(AgentBacktestRun.market == market)
             rows = session.execute(
                 query.order_by(desc(AgentBacktestRun.created_at), desc(AgentBacktestRun.id)).limit(limit)
             ).scalars().all()

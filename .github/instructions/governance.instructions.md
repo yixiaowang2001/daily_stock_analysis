@@ -9,6 +9,7 @@ applyTo: "README.md,docs/**,AGENTS.md,CLAUDE.md,.github/**,.claude/skills/**,scr
 - Root `SKILL.md` and `docs/openclaw-skill-integration.md` describe product or external integration behavior, not repository governance.
 - Repository skill source of truth is `.claude/skills/`; `.agents/skills/` is only a local mirror/adaptation directory when present.
 - Stock-related repository/global skill boundaries are documented in `docs/agent-skill-integration.md`.
+- Stock-related skills use DSA providers first and Codex external research fallback second; fallback facts must be labeled with source, retrieval time, cutoff, and unresolved gaps.
 - Explain which pipeline, release path, deployment path, review automation, or governance asset is affected and what the rollback path is.
 - Keep `README.md` limited to homepage-level content such as positioning, high-level capabilities, quick start, main entrypoints, and sponsorship/cooperation; put detailed behavior, configuration, troubleshooting, field contracts, and edge cases in `docs/*.md`.
 - Avoid widening permissions, secret exposure, or destructive automation without a clearly documented need.

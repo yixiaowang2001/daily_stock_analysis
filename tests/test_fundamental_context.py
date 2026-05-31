@@ -16,6 +16,7 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from data_provider.base import DataFetcherManager
+from data_provider.us_market_fetchers import _redact_sensitive_text
 
 
 class _DummyFetcher:
@@ -39,7 +40,7 @@ class _DummyBoardFetcher:
 
 
 class TestFundamentalContext(unittest.TestCase):
-    def test_non_cn_market_returns_not_supported(self) -> None:
+    def test_hk_market_returns_not_supported(self) -> None:
         manager = DataFetcherManager(fetchers=[])
         cfg = SimpleNamespace(
             enable_fundamental_pipeline=True,
@@ -49,8 +50,8 @@ class TestFundamentalContext(unittest.TestCase):
             fundamental_retry_max=1,
         )
         with patch("src.config.get_config", return_value=cfg):
-            ctx = manager.get_fundamental_context("AAPL")
-        self.assertEqual(ctx["market"], "us")
+            ctx = manager.get_fundamental_context("HK00700")
+        self.assertEqual(ctx["market"], "hk")
         self.assertEqual(ctx["status"], "not_supported")
         self.assertEqual(ctx["coverage"].get("valuation"), "not_supported")
         self.assertEqual(ctx["coverage"].get("growth"), "not_supported")
@@ -59,6 +60,75 @@ class TestFundamentalContext(unittest.TestCase):
         self.assertEqual(ctx["coverage"].get("capital_flow"), "not_supported")
         self.assertEqual(ctx["coverage"].get("dragon_tiger"), "not_supported")
         self.assertEqual(ctx["coverage"].get("boards"), "not_supported")
+
+    def test_us_market_without_fundamental_keys_returns_not_supported(self) -> None:
+        manager = DataFetcherManager(fetchers=[])
+        cfg = SimpleNamespace(
+            enable_fundamental_pipeline=True,
+            fundamental_cache_ttl_seconds=0,
+            fundamental_stage_timeout_seconds=1.5,
+            fundamental_fetch_timeout_seconds=0.8,
+            fundamental_retry_max=1,
+        )
+        with patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "", "FINNHUB_API_KEY": ""}), \
+                patch("src.config.get_config", return_value=cfg):
+            ctx = manager.get_fundamental_context("AAPL")
+        self.assertEqual(ctx["market"], "us")
+        self.assertEqual(ctx["status"], "not_supported")
+        self.assertEqual(ctx["coverage"].get("valuation"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("growth"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("earnings"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("boards"), "not_supported")
+
+    def test_us_fundamental_context_aggregates_keyed_provider_snapshot(self) -> None:
+        manager = DataFetcherManager(fetchers=[])
+        cfg = SimpleNamespace(
+            enable_fundamental_pipeline=True,
+            fundamental_cache_ttl_seconds=0,
+            fundamental_stage_timeout_seconds=1.5,
+            fundamental_fetch_timeout_seconds=0.8,
+            fundamental_retry_max=1,
+        )
+        snapshot = {
+            "status": "ok",
+            "source_chain": [{"provider": "alpha_vantage_overview", "result": "ok", "duration_ms": 0}],
+            "valuation": {"pe_ratio": 31.2, "pb_ratio": 48.1, "total_mv": 3.1e12},
+            "growth": {"quarterly_revenue_growth_yoy": 0.12},
+            "earnings": {"eps": 7.1, "analyst_target_price": 230.0},
+            "institution": {},
+            "boards": {"name": "Apple Inc", "sector": "Technology", "industry": "Consumer Electronics"},
+            "errors": [],
+            "snapshot_semantics": "latest_provider_snapshot_not_point_in_time",
+        }
+        with patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "test", "FINNHUB_API_KEY": ""}), \
+                patch("src.config.get_config", return_value=cfg), \
+                patch("data_provider.us_market_fetchers.AlphaVantageFetcher._is_available", return_value=True), \
+                patch(
+                    "data_provider.us_market_fetchers.AlphaVantageFetcher.get_fundamental_snapshot",
+                    return_value=snapshot,
+                ), \
+                patch("data_provider.us_market_fetchers.FinnhubFetcher._is_available", return_value=False):
+            ctx = manager.get_fundamental_context("AAPL")
+
+        self.assertEqual(ctx["market"], "us")
+        self.assertEqual(ctx["status"], "partial")
+        self.assertEqual(ctx["coverage"].get("valuation"), "ok")
+        self.assertEqual(ctx["coverage"].get("growth"), "ok")
+        self.assertEqual(ctx["coverage"].get("earnings"), "ok")
+        self.assertEqual(ctx["coverage"].get("boards"), "ok")
+        self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
+        self.assertEqual(ctx["valuation"]["data"]["pe_ratio"], 31.2)
+        self.assertEqual(ctx["boards"]["data"]["sector"], "Technology")
+        self.assertEqual(ctx["snapshot_semantics"], "latest_provider_snapshot_not_point_in_time")
+
+    def test_us_provider_errors_redact_api_keys(self) -> None:
+        with patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "secret-alpha", "FINNHUB_API_KEY": "secret-finn"}):
+            redacted = _redact_sensitive_text(
+                "API key secret-alpha exceeded; https://example.test?token=secret-finn&apikey=secret-alpha"
+            )
+        self.assertNotIn("secret-alpha", redacted)
+        self.assertNotIn("secret-finn", redacted)
+        self.assertIn("***", redacted)
 
     def test_etf_market_downgrades_to_partial_or_not_supported(self) -> None:
         manager = DataFetcherManager(fetchers=[])

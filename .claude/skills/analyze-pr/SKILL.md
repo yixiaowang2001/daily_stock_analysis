@@ -1,3 +1,8 @@
+---
+name: analyze-pr
+description: "Analyze a daily_stock_analysis GitHub pull request for necessity, template completeness, validation evidence, risks, fallback behavior, and merge readiness."
+---
+
 # Analyze PR
 
 分析 GitHub Pull Request，评估必要性、描述完整性、验证证据、主要风险与是否可直接合入。
@@ -69,6 +74,7 @@ gh run view <run_id> --log-failed
 - 是否破坏 API / Schema / Web / Desktop 兼容性
 - 是否破坏 fallback、降级路径、通知链路或发布流程
 - 是否存在明显逻辑错误、异常吞没、安全问题、配置语义变化未同步文档
+- 若 PR 涉及股票新闻搜索、行情、K 线、分钟数据或候选池事实包，确认 provider 失败时仍允许 Codex 外部信息获取兜底，并要求输出中标注来源、截点与未验证缺口；不要把 Bocha/SearXNG 等搜索失败变成整条分析链路硬失败，除非需求明确要求 fail-fast。
 
 ### Step 5: 生成评审文档
 

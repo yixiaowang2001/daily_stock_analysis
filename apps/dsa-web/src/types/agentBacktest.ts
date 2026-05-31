@@ -24,11 +24,13 @@ export interface AgentBacktestProfileCreateRequest {
   policyMarkdown: string;
 }
 
+export type AgentBacktestMarket = 'cn' | 'us';
+
 export interface AgentBacktestRunItem {
   id: number;
   name: string;
   status: string;
-  market: string;
+  market: AgentBacktestMarket | string;
   symbols: string[];
   symbolNames?: Record<string, string>;
   startDate?: string | null;

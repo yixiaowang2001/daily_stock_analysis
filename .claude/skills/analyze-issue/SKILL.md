@@ -1,3 +1,8 @@
+---
+name: analyze-issue
+description: "Analyze a daily_stock_analysis GitHub issue for validity, priority, repository ownership, data-provider fallback impact, and recommended handling."
+---
+
 # Analyze Issue
 
 分析 GitHub Issue，判断其真实性、优先级、仓库责任边界与建议动作。
@@ -39,6 +44,7 @@ gh issue view <issue_number> --repo ZhuLinsen/daily_stock_analysis --comments
 
 - 阅读相关代码、配置、测试、脚本、工作流与文档
 - 如果问题涉及 API、数据源 fallback、报告生成、通知发送、认证、桌面端、发布流程，明确写出影响面
+- 如果问题涉及股票新闻搜索、行情、K 线、分钟数据或候选池事实包，核对当前工作流是否允许 Codex 在 Bocha/SearXNG 等 provider 失败或结果为空时做外部信息获取兜底，并标注来源、截点与未验证缺口
 - 判断是实际 bug、环境配置问题、使用方式问题、还是外部依赖问题
 - 如怀疑已被修复，检查当前代码而不是只看 issue 描述
 

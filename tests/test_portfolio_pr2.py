@@ -441,6 +441,28 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertIn("AAPL", positions)
         self.assertAlmostEqual(positions["AAPL"]["market_value_base"], 700.0, places=6)
 
+    def test_single_us_account_snapshot_uses_usd_aggregate_currency(self) -> None:
+        account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="USD")
+        account_id = account["id"]
+        self.service.record_cash_ledger(
+            account_id=account_id,
+            event_date=date(2026, 1, 1),
+            direction="in",
+            amount=100.0,
+            currency="USD",
+        )
+
+        snapshot = self.service.get_portfolio_snapshot(
+            account_id=account_id,
+            as_of=date(2026, 1, 1),
+            cost_method="fifo",
+        )
+
+        self.assertEqual(snapshot["currency"], "USD")
+        self.assertFalse(snapshot["fx_stale"])
+        self.assertEqual(snapshot["total_cash"], 100.0)
+        self.assertEqual(snapshot["accounts"][0]["base_currency"], "USD")
+
     def test_sector_concentration_uses_unclassified_for_non_cn(self) -> None:
         us_account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="USD")
         us_id = us_account["id"]

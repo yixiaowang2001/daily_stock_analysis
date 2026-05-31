@@ -1,4 +1,4 @@
 interface:
   display_name: "DSA 日终关注列表复盘"
   short_description: "收盘后批量分析关注列表，按短中长线排序并输出关键价位。"
-  default_prompt: "Use $dsa-watchlist-daily-review to run an after-close DSA watchlist review, rank symbols across short/mid/long horizons, and produce entry, target, stop, and risk tables."
+  default_prompt: "Use $dsa-watchlist-daily-review to run an after-close DSA watchlist review, use Codex external fallback for missing news/stock facts with source labels, rank symbols across short/mid/long horizons, and produce entry, target, stop, and risk tables."

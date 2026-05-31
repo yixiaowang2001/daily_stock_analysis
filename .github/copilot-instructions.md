@@ -36,3 +36,4 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
 - Current repository collaboration skills live in `.claude/skills/`; keep them aligned with `AGENTS.md`.
 - `.agents/skills/` is a local mirror/adaptation directory, not a second source of truth.
 - Stock-related skill boundaries are documented in `docs/agent-skill-integration.md`.
+- Stock-related skills use DSA providers first and Codex external research fallback second; fallback facts must be labeled with source, retrieval time, cutoff, and unresolved gaps.

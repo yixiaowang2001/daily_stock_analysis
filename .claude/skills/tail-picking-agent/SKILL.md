@@ -58,8 +58,14 @@ When working inside the DSA repository, follow root `AGENTS.md`.
 6. Score only from data observable at or before `data_cutoff_time`. Full-day T bars are reference-only and must be labeled if used.
 7. Put a readable Chinese report first, then append machine-readable `tail_score_result` JSON.
 8. Persist every real prediction/evaluation before final answer, including one-symbol prompts, and mention the experiment id.
-9. For reviews, fetch or accept morning metrics first, then save review notes and case summary when persistence is supported. If the original prediction only exists in Codex session logs, backfill it into DSA storage before writing the review.
+9. For reviews, fetch or accept morning metrics first, then save review notes and case summary when persistence is supported. Morning auto-fetch should use `src/services/tail_morning_fetch.py`: strict morning minute window first, shared 1-minute intraday fallback (`src/services/tail_intraday_fetch.py`) second, and daily-high fallback only last. Treat existing `no_t1_bar`, `error:*`, or null `surge_pct_prev_close_930_1000` rows as incomplete and retry before calling the case a data gap. If the original prediction only exists in Codex session logs, backfill it into DSA storage before writing the review.
 10. When reviewing, write first-layer changes only as `layer1_change_requests` for user confirmation. Write second-layer learning as `layer2_calibration_notes` so future scoring can self-calibrate.
+
+## Codex External Research Fallback
+
+DSA data sources remain first priority. If DSA news/search providers such as Bocha, SearXNG, Tavily, Brave, SerpAPI, MiniMax, Anspire, or Iwencai fail or return no usable filtered results, Codex may use its own web/browser research to supplement catalysts, announcements, sector context, and public news.
+
+If DSA stock-data providers cannot supply quote, K-line, intraday price/volume, or morning-review facts, Codex may use external public market data as fallback. Label those facts as `Codex 外部兜底`, record source and retrieval time, and include them in `data_quality_flags` or the persisted evidence snapshot. Never treat external fallback as if it came from DSA, and do not use post-`data_cutoff_time` facts for a score that claims to be cutoff-limited.
 
 ## Output Contract
 

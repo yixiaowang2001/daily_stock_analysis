@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import math
+import re
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -65,6 +67,40 @@ DEFAULT_AGENT_PROFILES: List[Dict[str, str]] = [
     },
 ]
 
+DEFAULT_US_AGENT_PROFILES: List[Dict[str, str]] = [
+    {
+        "profile_key": "short",
+        "display_name": "短线操盘手",
+        "style_profile": "short",
+        "policy_version_label": "v1.0",
+        "policy_markdown": (
+            "风格边界：偏短线，关注盘前/盘中/盘后/隔夜流动性、事件催化、量价强弱和现金账户风险闸门。"
+            "允许做 1-5 个美股交易日内的机会，但必须遵守 IBKR 现金账户风控：只使用 settled cash，"
+            "卖出资金按 T+1 美股交易日释放，且每 5 个美股交易日最多 1 次日内回转。"
+        ),
+    },
+    {
+        "profile_key": "medium",
+        "display_name": "中线操盘手",
+        "style_profile": "medium",
+        "policy_version_label": "v1.0",
+        "policy_markdown": (
+            "风格边界：偏中线，关注 5-30 个美股交易日的趋势、财报/指引、行业轮动、ETF/板块相对强弱和宏观利率风险。"
+            "默认降低换手，避免把夜盘噪音当成主趋势。所有买入必须满足 settled cash 约束。"
+        ),
+    },
+    {
+        "profile_key": "long",
+        "display_name": "长线操盘手",
+        "style_profile": "long",
+        "policy_version_label": "v1.0",
+        "policy_markdown": (
+            "风格边界：偏长线，关注公司基本面、估值、财报质量、行业竞争格局和周线/月线结构。"
+            "可以观察 24 小时交易信息，但交易频率应低，优先避免现金冻结和信息过度反应。"
+        ),
+    },
+]
+
 DEFAULT_RULE_CONFIG: Dict[str, Any] = {
     "market": "cn",
     "lot_size": 100,
@@ -76,6 +112,51 @@ DEFAULT_RULE_CONFIG: Dict[str, Any] = {
     "price_tick": 0.01,
 }
 
+DEFAULT_US_RULE_CONFIG: Dict[str, Any] = {
+    "market": "us",
+    "account_type": "cash",
+    "base_currency": "USD",
+    "lot_size": 1,
+    "allow_fractional_shares": False,
+    "cash_settlement": "T+1",
+    "settlement_business_days": 1,
+    "settlement_timezone": "America/New_York",
+    "settlement_refresh_time": "20:00",
+    "extended_hours_enabled": True,
+    "overnight_trading_enabled": True,
+    "overnight_trade_date_note": (
+        "IBKR overnight orders are modeled conservatively by trade_date; "
+        "cash from sells becomes usable on the next US business day."
+    ),
+    "day_trade_limit_per_rolling_window": 1,
+    "day_trade_window_business_days": 5,
+    "commission_rate": 0.0,
+    "min_commission": 0.0,
+    "stamp_tax_rate": 0.0,
+    "transfer_fee_rate": 0.0,
+    "sell_sec_fee_rate": 0.0,
+    "sell_taf_fee_per_share": 0.0,
+    "price_tick": 0.01,
+    "data_source_priority": [
+        "longbridge",
+        "massive",
+        "twelvedata",
+        "finnhub",
+        "alpha_vantage",
+        "yfinance",
+        "stooq",
+    ],
+    "information_policy": {
+        "codex_research_first": True,
+        "provider_search_fallback_enabled": False,
+        "provider_search_priority": ["brave", "tavily", "serpapi", "searxng", "bocha", "minimax"],
+    },
+}
+
+SUPPORTED_MARKETS = {"cn", "us"}
+MARKET_BASE_CURRENCY = {"cn": "CNY", "us": "USD"}
+DEFAULT_RULE_VERSION = {"cn": "cn_a_v1", "us": "us_cash_ibkr_v1"}
+US_SYMBOL_PATTERN = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 VALID_SIDES = {"buy", "sell"}
 VALID_ORDER_TYPES = {"limit", "market"}
 MAX_OBSERVATIONS_PER_DAY = 5
@@ -103,14 +184,16 @@ class AgentBacktestService:
         end_date: Optional[date] = None,
         initial_cash_per_agent: float = 20000.0,
         max_observations_per_day: int = MAX_OBSERVATIONS_PER_DAY,
-        rule_version: str = "cn_a_v1",
+        rule_version: Optional[str] = None,
+        market: str = "cn",
         config: Optional[Dict[str, Any]] = None,
         profiles: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         name_norm = (name or "").strip()
         if not name_norm:
             raise AgentBacktestError("name is required")
-        symbols_norm = self._normalize_symbols(symbols)
+        market_norm = self._normalize_market(market)
+        symbols_norm = self._normalize_symbols(symbols, market=market_norm)
         if not symbols_norm:
             raise AgentBacktestError("symbols is required")
         if end_date is not None and start_date is not None and end_date < start_date:
@@ -122,23 +205,25 @@ class AgentBacktestService:
                 f"max_observations_per_day must be between 1 and {MAX_OBSERVATIONS_PER_DAY}"
             )
 
-        rule_config = self._merged_rule_config(config)
-        profile_inputs = profiles or DEFAULT_AGENT_PROFILES
+        rule_config = self._merged_rule_config(config, market=market_norm)
+        profile_inputs = profiles or self._default_profiles(market_norm)
         if not profile_inputs:
             raise AgentBacktestError("profiles is required")
 
         cash_date = start_date or date.today()
+        base_currency = str(rule_config.get("base_currency") or MARKET_BASE_CURRENCY[market_norm]).upper()
+        rule_version_norm = (rule_version or DEFAULT_RULE_VERSION[market_norm]).strip() or DEFAULT_RULE_VERSION[market_norm]
         with self.db.session_scope() as session:
             run = AgentBacktestRun(
                 name=name_norm,
                 status="draft",
-                market="cn",
+                market=market_norm,
                 symbols_json=self._json_dumps(symbols_norm),
                 start_date=start_date,
                 end_date=end_date,
                 initial_cash_per_agent=float(initial_cash_per_agent),
                 max_observations_per_day=int(max_observations_per_day),
-                rule_version=(rule_version or "cn_a_v1").strip() or "cn_a_v1",
+                rule_version=rule_version_norm,
                 config_json=self._json_dumps(rule_config),
             )
             session.add(run)
@@ -162,8 +247,8 @@ class AgentBacktestService:
                     owner_id=f"agent_backtest_run:{run.id}:{profile_key}",
                     name=f"{name_norm} / {display_name}",
                     broker="agent-backtest",
-                    market="cn",
-                    base_currency="CNY",
+                    market=market_norm,
+                    base_currency=base_currency,
                     is_active=True,
                 )
                 session.add(account)
@@ -175,7 +260,7 @@ class AgentBacktestService:
                         event_date=cash_date,
                         direction="in",
                         amount=float(initial_cash_per_agent),
-                        currency="CNY",
+                        currency=base_currency,
                         note=f"agent_backtest_run:{run.id} initial cash",
                     )
                 )
@@ -210,8 +295,19 @@ class AgentBacktestService:
 
         return self.get_run(run_id)
 
-    def list_runs(self, *, status: Optional[str] = None, limit: int = 50) -> Dict[str, Any]:
-        rows = self.repo.list_runs(status=(status or "").strip() or None, limit=max(1, min(int(limit), 200)))
+    def list_runs(
+        self,
+        *,
+        status: Optional[str] = None,
+        market: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        market_norm = self._normalize_market(market) if market else None
+        rows = self.repo.list_runs(
+            status=(status or "").strip() or None,
+            market=market_norm,
+            limit=max(1, min(int(limit), 200)),
+        )
         return {"items": [self._run_row_to_dict(row) for row in rows], "total": len(rows)}
 
     def get_run(self, run_id: int) -> Dict[str, Any]:
@@ -235,11 +331,6 @@ class AgentBacktestService:
         symbols: Optional[Iterable[str]] = None,
         max_observations_per_day: Optional[int] = None,
     ) -> Dict[str, Any]:
-        symbols_norm: Optional[List[str]] = None
-        if symbols is not None:
-            symbols_norm = self._normalize_symbols(symbols)
-            if not symbols_norm:
-                raise AgentBacktestError("symbols is required")
         if max_observations_per_day is not None and (
             int(max_observations_per_day) < 1
             or int(max_observations_per_day) > MAX_OBSERVATIONS_PER_DAY
@@ -250,7 +341,10 @@ class AgentBacktestService:
 
         with self.db.session_scope() as session:
             run = self._require_run_in_session(session, run_id)
-            if symbols_norm is not None:
+            if symbols is not None:
+                symbols_norm = self._normalize_symbols(symbols, market=run.market)
+                if not symbols_norm:
+                    raise AgentBacktestError("symbols is required")
                 run.symbols_json = self._json_dumps(symbols_norm)
             if max_observations_per_day is not None:
                 run.max_observations_per_day = int(max_observations_per_day)
@@ -283,8 +377,8 @@ class AgentBacktestService:
                 owner_id=f"agent_backtest_run:{run.id}:{profile_key}",
                 name=f"{run.name} / {display_name}",
                 broker="agent-backtest",
-                market="cn",
-                base_currency="CNY",
+                market=run.market,
+                base_currency=self._base_currency_for_run(run),
                 is_active=True,
             )
             session.add(account)
@@ -296,7 +390,7 @@ class AgentBacktestService:
                     event_date=joined_date,
                     direction="in",
                     amount=float(run.initial_cash_per_agent),
-                    currency="CNY",
+                    currency=self._base_currency_for_run(run),
                     note=f"agent_backtest_run:{run.id} profile {profile_key} initial cash",
                 )
             )
@@ -372,7 +466,11 @@ class AgentBacktestService:
                 raise AgentBacktestError(
                     f"{profile.profile_key} exceeded max_observations_per_day={run.max_observations_per_day}"
                 )
-            symbols_payload = self._normalize_symbols(symbols) if symbols is not None else self._json_loads(run.symbols_json, [])
+            symbols_payload = (
+                self._normalize_symbols(symbols, market=run.market)
+                if symbols is not None
+                else self._json_loads(run.symbols_json, [])
+            )
             row = AgentBacktestObservation(
                 run_id=run.id,
                 profile_id=profile.id,
@@ -413,7 +511,6 @@ class AgentBacktestService:
         if not action_norm:
             raise AgentBacktestError("action is required")
         side_norm = self._normalize_optional_side(side)
-        symbol_norm = self._normalize_optional_symbol(symbol)
         if confidence is not None and not (0 <= float(confidence) <= 1):
             raise AgentBacktestError("confidence must be between 0 and 1")
         if quantity is not None and quantity <= 0:
@@ -424,6 +521,7 @@ class AgentBacktestService:
         with self.db.session_scope() as session:
             run = self._require_run_in_session(session, run_id)
             profile = self._require_profile_in_session(session, run_id, profile_key)
+            symbol_norm = self._normalize_optional_symbol(symbol, market=run.market)
             self._validate_decision_symbol_scope(
                 run=run,
                 profile=profile,
@@ -473,14 +571,12 @@ class AgentBacktestService:
         decision_id: Optional[int] = None,
         limit_price: Optional[float] = None,
     ) -> Dict[str, Any]:
-        symbol_norm = self._normalize_required_symbol(symbol)
         side_norm = self._normalize_side(side)
         order_type_norm = (order_type or "limit").strip().lower()
         if order_type_norm not in VALID_ORDER_TYPES:
             raise AgentBacktestError("order_type must be limit or market")
         if effective_at < submitted_at:
             raise AgentBacktestError("effective_at cannot be before submitted_at")
-        self._validate_cn_lot(requested_quantity)
         if order_type_norm == "limit" and (limit_price is None or limit_price <= 0):
             raise AgentBacktestError("limit_price is required for limit orders")
         if limit_price is not None and limit_price <= 0:
@@ -489,6 +585,8 @@ class AgentBacktestService:
         with self.db.session_scope() as session:
             run = self._require_run_in_session(session, run_id)
             profile = self._require_profile_in_session(session, run_id, profile_key)
+            symbol_norm = self._normalize_required_symbol(symbol, market=run.market)
+            self._validate_order_quantity(requested_quantity, rule_config=self._json_loads(run.config_json, {}))
             self._validate_order_symbol_scope(
                 run=run,
                 profile=profile,
@@ -532,7 +630,6 @@ class AgentBacktestService:
     ) -> Dict[str, Any]:
         if price <= 0:
             raise AgentBacktestError("price must be > 0")
-        self._validate_cn_lot(quantity)
         trade_date = filled_at.date()
 
         with self.db.get_session() as session:
@@ -547,8 +644,9 @@ class AgentBacktestService:
             profile = self.repo.get_profile(run_id=run_id, profile_id=order.profile_id, session=session)
             if profile is None:
                 raise AgentBacktestError(f"profile not found for order: {order_id}")
-            filled_qty = self.repo.filled_quantity_for_order(order_id=order_id, session=session)
             rule_config = self._json_loads(run.config_json, {})
+            self._validate_order_quantity(quantity, rule_config=rule_config)
+            filled_qty = self.repo.filled_quantity_for_order(order_id=order_id, session=session)
             account_id = int(profile.account_id)
             order_snapshot = self._order_row_to_dict(order)
 
@@ -563,7 +661,7 @@ class AgentBacktestService:
             tax=tax,
             rule_config=rule_config,
         )
-        self._validate_fill_against_a_share_rules(
+        self._validate_fill_against_market_rules(
             account_id=account_id,
             side=order_snapshot["side"],
             symbol=order_snapshot["symbol"],
@@ -572,6 +670,8 @@ class AgentBacktestService:
             fee=fee_value,
             tax=tax_value,
             trade_date=trade_date,
+            market=str(rule_config.get("market") or "cn"),
+            rule_config=rule_config,
         )
 
         with self.db.session_scope() as session:
@@ -605,8 +705,8 @@ class AgentBacktestService:
                 account_id=profile.account_id,
                 trade_uid=f"agentbt:{order.id}:{fill.id}",
                 symbol=order.symbol,
-                market="cn",
-                currency="CNY",
+                market=str(rule_config.get("market") or "cn"),
+                currency=self._base_currency_from_config(rule_config),
                 trade_date=trade_date,
                 side=order.side,
                 quantity=float(quantity),
@@ -784,14 +884,26 @@ class AgentBacktestService:
     # Validation helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _normalize_symbols(symbols: Iterable[str]) -> List[str]:
+    def _default_profiles(market: str) -> List[Dict[str, str]]:
+        return DEFAULT_US_AGENT_PROFILES if market == "us" else DEFAULT_AGENT_PROFILES
+
+    @staticmethod
+    def _normalize_market(market: str) -> str:
+        market_norm = (market or "cn").strip().lower()
+        if market_norm not in SUPPORTED_MARKETS:
+            raise AgentBacktestError(f"market must be one of {sorted(SUPPORTED_MARKETS)}")
+        return market_norm
+
+    @staticmethod
+    def _normalize_symbols(symbols: Iterable[str], *, market: str = "cn") -> List[str]:
         result: List[str] = []
         for raw in symbols:
-            code = canonical_stock_code(str(raw or "").strip())
+            raw_text = str(raw or "").strip()
+            if not raw_text:
+                continue
+            code = AgentBacktestService._normalize_required_symbol(raw_text, market=market)
             if not code:
                 continue
-            if not (code.isdigit() and len(code) == 6):
-                raise AgentBacktestError(f"only 6-digit A-share symbols are supported: {raw}")
             if code not in result:
                 result.append(code)
         return result
@@ -822,16 +934,21 @@ class AgentBacktestService:
         return f"{hour:02d}:{minute:02d}:{second:02d}"
 
     @staticmethod
-    def _normalize_optional_symbol(symbol: Optional[str]) -> Optional[str]:
+    def _normalize_optional_symbol(symbol: Optional[str], *, market: str = "cn") -> Optional[str]:
         if symbol is None or not str(symbol).strip():
             return None
-        return AgentBacktestService._normalize_required_symbol(symbol)
+        return AgentBacktestService._normalize_required_symbol(symbol, market=market)
 
     @staticmethod
-    def _normalize_required_symbol(symbol: str) -> str:
+    def _normalize_required_symbol(symbol: str, *, market: str = "cn") -> str:
         code = canonical_stock_code(str(symbol or "").strip())
-        if not (code and code.isdigit() and len(code) == 6):
-            raise AgentBacktestError(f"only 6-digit A-share symbols are supported: {symbol}")
+        market_norm = AgentBacktestService._normalize_market(market)
+        if market_norm == "cn":
+            if not (code and code.isdigit() and len(code) == 6):
+                raise AgentBacktestError(f"only 6-digit A-share symbols are supported: {symbol}")
+            return code
+        if not (code and US_SYMBOL_PATTERN.match(code)):
+            raise AgentBacktestError(f"only US stock tickers are supported for US runs: {symbol}")
         return code
 
     @staticmethod
@@ -848,11 +965,17 @@ class AgentBacktestService:
         return AgentBacktestService._normalize_side(side)
 
     @staticmethod
-    def _validate_cn_lot(quantity: float) -> None:
+    def _validate_order_quantity(quantity: float, *, rule_config: Dict[str, Any]) -> None:
         if quantity <= 0:
             raise AgentBacktestError("quantity must be > 0")
-        if abs(float(quantity) % 100) > EPS:
-            raise AgentBacktestError("A-share order quantity must be a multiple of 100")
+        market = str(rule_config.get("market") or "cn").lower()
+        if market == "us" and not bool(rule_config.get("allow_fractional_shares", False)):
+            if abs(float(quantity) - round(float(quantity))) > EPS:
+                raise AgentBacktestError("US cash-account simulation requires whole-share quantity")
+            return
+        lot_size = float(rule_config.get("lot_size") or DEFAULT_RULE_CONFIG["lot_size"])
+        if lot_size > 1 and abs(float(quantity) % lot_size) > EPS:
+            raise AgentBacktestError(f"order quantity must be a multiple of {int(lot_size)}")
 
     def _validate_decision_symbol_scope(
         self,
@@ -902,6 +1025,44 @@ class AgentBacktestService:
                 return True
         return False
 
+    def _validate_fill_against_market_rules(
+        self,
+        *,
+        account_id: int,
+        side: str,
+        symbol: str,
+        quantity: float,
+        price: float,
+        fee: float,
+        tax: float,
+        trade_date: date,
+        market: str,
+        rule_config: Dict[str, Any],
+    ) -> None:
+        if market == "us":
+            self._validate_fill_against_us_cash_rules(
+                account_id=account_id,
+                side=side,
+                symbol=symbol,
+                quantity=quantity,
+                price=price,
+                fee=fee,
+                tax=tax,
+                trade_date=trade_date,
+                rule_config=rule_config,
+            )
+            return
+        self._validate_fill_against_a_share_rules(
+            account_id=account_id,
+            side=side,
+            symbol=symbol,
+            quantity=quantity,
+            price=price,
+            fee=fee,
+            tax=tax,
+            trade_date=trade_date,
+        )
+
     def _validate_fill_against_a_share_rules(
         self,
         *,
@@ -941,13 +1102,184 @@ class AgentBacktestService:
         if available + EPS < quantity:
             raise AgentBacktestError("A-share T+1 rule: sell quantity exceeds previous-day available shares")
 
+    def _validate_fill_against_us_cash_rules(
+        self,
+        *,
+        account_id: int,
+        side: str,
+        symbol: str,
+        quantity: float,
+        price: float,
+        fee: float,
+        tax: float,
+        trade_date: date,
+        rule_config: Dict[str, Any],
+    ) -> None:
+        if side == "buy":
+            required_cash = quantity * price + fee + tax
+            settled_cash = self._available_us_settled_cash(account_id=account_id, as_of=trade_date)
+            if settled_cash + EPS < required_cash:
+                raise AgentBacktestError(
+                    "US cash-account T+1 settlement rule: insufficient settled cash "
+                    f"for fill (settled_cash={round(settled_cash, 6)}, required={round(required_cash, 6)})"
+                )
+            return
+
+        snapshot = self.portfolio_service.get_portfolio_snapshot(
+            account_id=account_id,
+            as_of=trade_date,
+            cost_method="fifo",
+        )
+        account = (snapshot.get("accounts") or [{}])[0]
+        available = 0.0
+        for pos in account.get("positions") or []:
+            if pos.get("symbol") == symbol:
+                available = float(pos.get("quantity") or 0.0)
+                break
+        if available + EPS < quantity:
+            raise AgentBacktestError("US cash-account rule: sell quantity exceeds current available shares")
+
+        if self._would_create_us_day_trade(
+            account_id=account_id,
+            symbol=symbol,
+            trade_date=trade_date,
+        ):
+            limit = int(rule_config.get("day_trade_limit_per_rolling_window", 1) or 1)
+            window_days = int(rule_config.get("day_trade_window_business_days", 5) or 5)
+            used = self._count_us_day_trades(
+                account_id=account_id,
+                through=trade_date,
+                window_business_days=window_days,
+            )
+            if used >= limit:
+                raise AgentBacktestError(
+                    "US cash-account day-trade guard: weekly day-trade allowance already used "
+                    f"(limit={limit}, used={used}, window_business_days={window_days})"
+                )
+
+    def _available_us_settled_cash(self, *, account_id: int, as_of: date) -> float:
+        with self.db.get_session() as session:
+            ledger_rows = session.execute(
+                select(PortfolioCashLedger)
+                .where(
+                    and_(
+                        PortfolioCashLedger.account_id == account_id,
+                        PortfolioCashLedger.event_date <= as_of,
+                    )
+                )
+                .order_by(PortfolioCashLedger.event_date.asc(), PortfolioCashLedger.id.asc())
+            ).scalars().all()
+            trade_rows = session.execute(
+                select(PortfolioTrade)
+                .where(
+                    and_(
+                        PortfolioTrade.account_id == account_id,
+                        PortfolioTrade.trade_date <= as_of,
+                    )
+                )
+                .order_by(PortfolioTrade.trade_date.asc(), PortfolioTrade.id.asc())
+            ).scalars().all()
+
+        cash = 0.0
+        for row in ledger_rows:
+            amount = float(row.amount or 0.0)
+            direction = (row.direction or "").strip().lower()
+            if direction == "in":
+                cash += amount
+            elif direction == "out":
+                cash -= amount
+
+        for row in trade_rows:
+            gross = float(row.quantity or 0.0) * float(row.price or 0.0)
+            fee = float(row.fee or 0.0)
+            tax = float(row.tax or 0.0)
+            side = (row.side or "").strip().lower()
+            if side == "buy":
+                cash -= gross + fee + tax
+            elif side == "sell" and self._us_settlement_date(row.trade_date) <= as_of:
+                cash += gross - fee - tax
+        return cash
+
+    def _would_create_us_day_trade(self, *, account_id: int, symbol: str, trade_date: date) -> bool:
+        with self.db.get_session() as session:
+            buy_exists = session.execute(
+                select(PortfolioTrade.id)
+                .where(
+                    and_(
+                        PortfolioTrade.account_id == account_id,
+                        PortfolioTrade.symbol == symbol,
+                        PortfolioTrade.trade_date == trade_date,
+                        PortfolioTrade.side == "buy",
+                    )
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+        return buy_exists is not None
+
+    def _count_us_day_trades(
+        self,
+        *,
+        account_id: int,
+        through: date,
+        window_business_days: int,
+    ) -> int:
+        start = self._subtract_us_business_days(through, max(0, window_business_days - 1))
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(PortfolioTrade.symbol, PortfolioTrade.trade_date, PortfolioTrade.side)
+                .where(
+                    and_(
+                        PortfolioTrade.account_id == account_id,
+                        PortfolioTrade.trade_date >= start,
+                        PortfolioTrade.trade_date <= through,
+                    )
+                )
+            ).all()
+        sides_by_key: Dict[tuple[str, date], set[str]] = {}
+        for symbol, trade_dt, side in rows:
+            key = (str(symbol), trade_dt)
+            sides_by_key.setdefault(key, set()).add(str(side).lower())
+        return sum(1 for sides in sides_by_key.values() if {"buy", "sell"}.issubset(sides))
+
     @staticmethod
-    def _merged_rule_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        merged = dict(DEFAULT_RULE_CONFIG)
+    def _us_settlement_date(trade_date: date) -> date:
+        current = trade_date
+        added = 0
+        while added < 1:
+            current += timedelta(days=1)
+            if current.weekday() < 5:
+                added += 1
+        return current
+
+    @staticmethod
+    def _subtract_us_business_days(value: date, days: int) -> date:
+        current = value
+        remaining = days
+        while remaining > 0:
+            current -= timedelta(days=1)
+            if current.weekday() < 5:
+                remaining -= 1
+        return current
+
+    @staticmethod
+    def _merged_rule_config(config: Optional[Dict[str, Any]], *, market: str = "cn") -> Dict[str, Any]:
+        market_norm = AgentBacktestService._normalize_market(market)
+        merged = deepcopy(DEFAULT_US_RULE_CONFIG if market_norm == "us" else DEFAULT_RULE_CONFIG)
         if config:
             merged.update(config)
-        merged["market"] = "cn"
+        merged["market"] = market_norm
+        merged["base_currency"] = str(
+            merged.get("base_currency") or MARKET_BASE_CURRENCY[market_norm]
+        ).upper()
         return merged
+
+    @staticmethod
+    def _base_currency_from_config(rule_config: Dict[str, Any]) -> str:
+        market = str(rule_config.get("market") or "cn").lower()
+        return str(rule_config.get("base_currency") or MARKET_BASE_CURRENCY.get(market, "CNY")).upper()
+
+    def _base_currency_for_run(self, run: AgentBacktestRun) -> str:
+        return self._base_currency_from_config(self._json_loads(run.config_json, {}))
 
     @staticmethod
     def _resolve_trade_costs(
@@ -972,6 +1304,9 @@ class AgentBacktestService:
             tax_value = amount * tax_rate if side == "sell" else 0.0
         else:
             tax_value = float(tax)
+        if side == "sell":
+            fee_value += amount * float(rule_config.get("sell_sec_fee_rate", 0.0) or 0.0)
+            fee_value += float(quantity) * float(rule_config.get("sell_taf_fee_per_share", 0.0) or 0.0)
         if fee_value < 0 or tax_value < 0:
             raise AgentBacktestError("fee and tax must be >= 0")
         return (round(fee_value, 6), round(tax_value, 6))
@@ -1004,19 +1339,21 @@ class AgentBacktestService:
         session: Optional[Any] = None,
     ) -> Dict[str, Any]:
         symbols = self._json_loads(row.symbols_json, [])
+        config = self._json_loads(row.config_json, {})
+        configured_symbol_names = config.get("symbol_names") if isinstance(config, dict) else None
         payload = {
             "id": int(row.id),
             "name": row.name,
             "status": row.status,
             "market": row.market,
             "symbols": symbols,
-            "symbol_names": self._resolve_symbol_names(symbols),
+            "symbol_names": self._resolve_symbol_names(symbols, overrides=configured_symbol_names),
             "start_date": row.start_date.isoformat() if row.start_date else None,
             "end_date": row.end_date.isoformat() if row.end_date else None,
             "initial_cash_per_agent": float(row.initial_cash_per_agent or 0.0),
             "max_observations_per_day": int(row.max_observations_per_day or 0),
             "rule_version": row.rule_version,
-            "config": self._json_loads(row.config_json, {}),
+            "config": config,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
@@ -1029,14 +1366,28 @@ class AgentBacktestService:
         return payload
 
     @staticmethod
-    def _resolve_symbol_names(symbols: Iterable[str]) -> Dict[str, str]:
+    def _resolve_symbol_names(
+        symbols: Iterable[str],
+        *,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, str]:
         names: Dict[str, str] = {}
+        override_map = {
+            str(key or "").strip().upper(): str(value or "").strip()
+            for key, value in (overrides or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        }
         for raw_symbol in symbols:
             symbol = str(raw_symbol or "").strip().upper()
             if not symbol:
                 continue
             lookup_code = canonical_stock_code(symbol)
-            name = STOCK_NAME_MAP.get(lookup_code) or get_index_stock_name(lookup_code)
+            name = (
+                override_map.get(symbol)
+                or override_map.get(lookup_code)
+                or STOCK_NAME_MAP.get(lookup_code)
+                or get_index_stock_name(lookup_code)
+            )
             names[symbol] = str(name).strip() if is_meaningful_stock_name(name, lookup_code) else ""
         return names
 

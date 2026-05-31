@@ -57,6 +57,8 @@ class AgentBacktestAutomationInstallerTestCase(unittest.TestCase):
             self.assertIn("every active profile", morning)
             self.assertIn("observe/hold with no trade is valid", morning)
             self.assertIn("exit_only_symbols may be researched", morning)
+            self.assertIn("codex_research_fallback.status=\"recommended\"", morning)
+            self.assertIn("source title/date/URL", morning)
             self.assertIn(f'cwds = ["{repo_root.resolve()}"]', morning)
 
             late_morning = (
@@ -102,6 +104,7 @@ class AgentBacktestAutomationInstallerTestCase(unittest.TestCase):
             self.assertIn("self-review markdown", close)
             self.assertIn("all active traders", close)
             self.assertIn("valuation_stale", close)
+            self.assertIn("codex_research_fallback.status=\"recommended\"", close)
 
     def test_shell_schedule_close_dry_run_keeps_live_data_and_active_profiles(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -130,6 +133,7 @@ class AgentBacktestAutomationInstallerTestCase(unittest.TestCase):
         self.assertIn("--live-data", completed.stdout)
         self.assertIn("所有 active profile", completed.stdout)
         self.assertIn("cycle 输出 generated 列表中的每个 context_markdown", completed.stdout)
+        self.assertIn("codex_research_fallback", completed.stdout)
         self.assertNotIn("short_context.md、medium_context.md、long_context.md", completed.stdout)
 
 

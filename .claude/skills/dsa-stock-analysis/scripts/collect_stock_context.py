@@ -243,6 +243,46 @@ def _collect_news(config: Any, code: str, name: str, max_results: int) -> Dict[s
         return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _codex_research_fallback(stock: Dict[str, Any], *, include_news: bool) -> Dict[str, Any]:
+    reasons: List[str] = []
+
+    if include_news:
+        news = stock.get("news") if isinstance(stock.get("news"), dict) else {}
+        results = news.get("results") if isinstance(news.get("results"), list) else []
+        if not news or news.get("available") is False:
+            reasons.append("news_search_unavailable")
+        elif news.get("success") is False:
+            reasons.append("news_search_failed")
+        elif not results:
+            reasons.append("news_search_empty")
+
+    if not stock.get("quote"):
+        reasons.append("quote_missing")
+
+    daily = stock.get("daily") if isinstance(stock.get("daily"), dict) else {}
+    if not daily or int(daily.get("rows") or 0) <= 0 or not daily.get("latest"):
+        reasons.append("daily_kline_missing")
+
+    return {
+        "enabled": True,
+        "needed": bool(reasons),
+        "reasons": reasons,
+        "allowed_scopes": [
+            "recent news and company announcements",
+            "realtime or delayed quote cross-check",
+            "recent daily or intraday price context",
+            "public fundamentals when DSA fundamentals are missing",
+        ],
+        "policy": (
+            "If DSA providers or SearchService return no usable facts, Codex may use "
+            "its own web/browser/finance research tools as external fallback. Label "
+            "source, timestamp, and cutoff explicitly; keep fallback facts separate "
+            "from DSA-collected facts and do not write them to the DSA database unless "
+            "a repository workflow explicitly supports that."
+        ),
+    }
+
+
 def _collect_one(args: argparse.Namespace, raw_code: str, manager: Any, db: Any, config: Any) -> Dict[str, Any]:
     from data_provider.base import canonical_stock_code, normalize_stock_code
     from src.core.trading_calendar import get_market_for_stock
@@ -344,6 +384,11 @@ def _collect_one(args: argparse.Namespace, raw_code: str, manager: Any, db: Any,
                 max_results=args.news_results,
             )
         )
+
+    stock["codex_research_fallback"] = _codex_research_fallback(
+        stock,
+        include_news=bool(args.include_news),
+    )
 
     return _jsonable(stock)
 

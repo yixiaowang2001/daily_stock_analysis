@@ -9,6 +9,7 @@ import unittest
 from argparse import Namespace
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.run_tail_tactics_codex_review import (
     command_apply_review,
@@ -154,6 +155,68 @@ class TailTacticsCodexReviewRunnerTestCase(unittest.TestCase):
 
         self.assertTrue(payload["skipped"])
         self.assertEqual(payload["target_trade_date"], "2026-05-28")
+
+    def test_prepare_review_retries_incomplete_existing_morning_metrics(self) -> None:
+        experiment_id = self.db.create_tail_experiment(
+            trade_date=date(2026, 5, 28),
+            strategy_version_id=self.strategy_id,
+            pasted_raw="603439",
+            symbols=["603439"],
+            param_snapshot={"workflow_goal": "candidate_pool_strategy_experiment"},
+            status="ranked",
+        )
+        self.db.patch_tail_experiment(
+            experiment_id,
+            {
+                "ranking_session_id": "tail_exp_incomplete",
+                "ranking_output": (
+                    "评分报告\n"
+                    '{"tail_score_result":[{"code":"603439","score":63,'
+                    '"action_level":"watch"}]}'
+                ),
+            },
+        )
+        self.db.upsert_tail_morning_metrics(
+            experiment_id,
+            [
+                {
+                    "symbol": "603439",
+                    "surge_pct_prev_close_930_1000": None,
+                    "source": "no_t1_bar",
+                }
+            ],
+        )
+
+        fake_items = [
+            {
+                "symbol": "603439",
+                "surge_pct_prev_close_930_1000": 9.8649,
+                "source": "akshare_stock_zh_a_minute_1m_0930_1001",
+            }
+        ]
+        with patch(
+            "scripts.run_tail_tactics_codex_review.auto_fetch_tail_morning_metrics",
+            return_value=(fake_items, date(2026, 5, 29), ["603439: fallback ok"]),
+        ):
+            payload = command_prepare_review(
+                Namespace(
+                    experiment_id=None,
+                    trade_date=None,
+                    morning_trade_date="2026-05-29",
+                    today="2026-05-29",
+                    context_dir=str(self.data_dir / "contexts"),
+                    no_auto_fetch=False,
+                    force_auto_fetch=False,
+                    include_reviewed=False,
+                    allow_non_trading_day=False,
+                )
+            )
+
+        self.assertFalse(payload["skipped"])
+        self.assertEqual(payload["experiment_id"], experiment_id)
+        refreshed = self.db.list_tail_morning_metrics(experiment_id)
+        self.assertEqual(refreshed[0]["source"], "akshare_stock_zh_a_minute_1m_0930_1001")
+        self.assertAlmostEqual(refreshed[0]["surge_pct_prev_close_930_1000"], 9.8649, places=4)
 
 
 if __name__ == "__main__":

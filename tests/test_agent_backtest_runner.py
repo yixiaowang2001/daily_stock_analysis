@@ -98,6 +98,114 @@ class AgentBacktestRunnerTestCase(unittest.TestCase):
         self.assertTrue(Path(short_context["context_markdown"]).exists())
         self.assertTrue(Path(aggressive_context["context_markdown"]).exists())
 
+    def test_realtime_quote_timeout_uses_ibkr_timeout_when_set(self) -> None:
+        original = os.environ.get("IBKR_TIMEOUT_SECONDS")
+        os.environ["IBKR_TIMEOUT_SECONDS"] = "20"
+        try:
+            self.assertEqual(RunnerContextBuilder._realtime_quote_timeout_seconds(), 20)
+        finally:
+            if original is None:
+                os.environ.pop("IBKR_TIMEOUT_SECONDS", None)
+            else:
+                os.environ["IBKR_TIMEOUT_SECONDS"] = original
+
+    def test_should_skip_ibkr_realtime_after_intraday_timeout(self) -> None:
+        self.assertTrue(
+            RunnerContextBuilder._should_skip_ibkr_realtime(
+                {
+                    "status": "failed",
+                    "source": "ibkr_intraday_1m",
+                    "error": "IBKR intraday data timed out for AAPL",
+                }
+            )
+        )
+        self.assertTrue(
+            RunnerContextBuilder._should_skip_ibkr_realtime(
+                {
+                    "status": "failed",
+                    "source": "ibkr_intraday_1m",
+                    "error": "IBKR temporarily disabled for 300s after failure",
+                }
+            )
+        )
+        self.assertFalse(
+            RunnerContextBuilder._should_skip_ibkr_realtime(
+                {"status": "failed", "source": "other", "error": "provider failed"}
+            )
+        )
+
+    def test_us_intraday_source_priority_defaults_to_historical_minute_providers(self) -> None:
+        original = os.environ.get("US_INTRADAY_DATA_SOURCE_PRIORITY")
+        os.environ.pop("US_INTRADAY_DATA_SOURCE_PRIORITY", None)
+        try:
+            self.assertEqual(
+                RunnerContextBuilder._us_intraday_source_keys(),
+                ["massive", "twelvedata", "ibkr"],
+            )
+        finally:
+            if original is not None:
+                os.environ["US_INTRADAY_DATA_SOURCE_PRIORITY"] = original
+
+    def test_fetch_intraday_cutoff_falls_back_between_us_minute_providers(self) -> None:
+        class FailingIntradayFetcher:
+            def get_intraday_bars_until(self, *_args, **_kwargs):
+                raise RuntimeError("provider unavailable")
+
+        class GoodIntradayFetcher:
+            def get_intraday_bars_until(self, *_args, **_kwargs):
+                return [
+                    {
+                        "timestamp": "2026-05-29 09:30:00",
+                        "date": "2026-05-29",
+                        "time": "09:30:00",
+                        "open": 314.0,
+                        "high": 314.5,
+                        "low": 313.8,
+                        "close": 314.1,
+                        "volume": 1000,
+                        "amount": 314100,
+                    },
+                    {
+                        "timestamp": "2026-05-29 09:40:00",
+                        "date": "2026-05-29",
+                        "time": "09:40:00",
+                        "open": 314.1,
+                        "high": 315.0,
+                        "low": 314.0,
+                        "close": 314.8,
+                        "volume": 1200,
+                        "amount": 377760,
+                    },
+                ]
+
+        builder = RunnerContextBuilder(
+            service=self.service,
+            portfolio_service=PortfolioService(),
+            stock_repo=StockRepository(self.db),
+        )
+        original = RunnerContextBuilder._us_intraday_fetchers
+        RunnerContextBuilder._us_intraday_fetchers = staticmethod(
+            lambda: [
+                ("massive", "massive_intraday_1m", FailingIntradayFetcher()),
+                ("twelvedata", "twelvedata_intraday_1m", GoodIntradayFetcher()),
+            ]
+        )
+        try:
+            payload = builder._fetch_intraday_cutoff(
+                symbol="AAPL",
+                live_data=True,
+                run={"market": "us"},
+                trade_date=date(2026, 5, 29),
+                data_cutoff_at=datetime(2026, 5, 29, 9, 40),
+            )
+        finally:
+            RunnerContextBuilder._us_intraday_fetchers = staticmethod(original)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["source"], "twelvedata_intraday_1m")
+        self.assertEqual(payload["window_close"], 314.8)
+        self.assertEqual(payload["bar_count"], 2)
+
     def test_cycle_researches_removed_watchlist_holdings_as_exit_only(self) -> None:
         run = self.service.create_run(
             name="Runner 退出观察",
@@ -177,13 +285,15 @@ class AgentBacktestRunnerTestCase(unittest.TestCase):
         self.assertEqual(payload["observation"]["symbols"], ["000001", "600519", "000002"])
 
         fact = payload["evidence"]["symbol_facts"]["000001"]
-        self.assertEqual(fact["schema_version"], "agent_backtest_symbol_facts_v2")
+        self.assertEqual(fact["schema_version"], "agent_backtest_symbol_facts_v3")
         self.assertIn("market_data", fact)
         self.assertIn("technical_context", fact)
         self.assertIn("fundamental_context", fact)
         self.assertIn("information_context", fact)
+        self.assertIn("codex_research_fallback", fact)
         self.assertIn("sentiment_context", fact)
         self.assertEqual(fact["fundamental_context"], {"status": "skipped", "reason": "live_data_disabled"})
+        self.assertEqual(fact["codex_research_fallback"]["status"], "disabled")
 
         medium_context = next(item for item in result["generated"] if item["profile_key"] == "medium")
         medium_payload = json.loads(Path(medium_context["context_json"]).read_text(encoding="utf-8"))
@@ -196,6 +306,357 @@ class AgentBacktestRunnerTestCase(unittest.TestCase):
             payload["evidence"]["symbol_facts"],
             medium_payload["evidence"]["symbol_facts"],
         )
+
+    def test_fact_data_quality_marks_missing_and_not_supported_layers(self) -> None:
+        quality = RunnerContextBuilder._fact_data_quality(
+            {
+                "market_data": {
+                    "daily_bars_available": 260,
+                    "daily_bars_stale_for_trade_date": True,
+                    "realtime_quote": {"price": 100.0, "source": "unit-test"},
+                },
+                "technical_context": {"status": "no_data"},
+                "fundamental_context": {
+                    "code": "AAPL",
+                    "fundamental_context": {"status": "not_supported"},
+                },
+                "information_context": {"status": "skipped", "reason": "codex_research_first"},
+                "sentiment_context": {"status": "derived"},
+            }
+        )
+
+        self.assertEqual(quality["layer_status"]["market_data"], "partial")
+        self.assertEqual(quality["layer_status"]["fundamental_context"], "not_supported")
+        self.assertEqual(quality["layer_status"]["information_context"], "skipped")
+        self.assertIn("market_data", quality["unavailable_layers"])
+        self.assertIn("fundamental_context", quality["unavailable_layers"])
+        self.assertIn("information_context", quality["unavailable_layers"])
+
+    def test_symbol_facts_refreshes_stale_daily_cache_for_trade_date(self) -> None:
+        class FakeStockRepo:
+            def get_latest(self, _symbol: str, days: int = 2) -> list[SimpleNamespace]:
+                return [
+                    SimpleNamespace(
+                        date=date(2026, 1, 1),
+                        open=10.0,
+                        high=11.0,
+                        low=9.0,
+                        close=10.5,
+                        volume=1000,
+                        amount=None,
+                        pct_chg=None,
+                    )
+                    for _ in range(days)
+                ]
+
+        builder = RunnerContextBuilder(
+            service=self.service,
+            portfolio_service=PortfolioService(),
+            stock_repo=FakeStockRepo(),
+        )
+        calls = []
+
+        def fake_fetch_daily_rows(
+            *,
+            symbol: str,
+            days: int,
+            target_date: date | None = None,
+        ) -> tuple[list[dict], dict]:
+            calls.append((symbol, days, target_date))
+            rows = [
+                {
+                    "date": f"2025-12-{day:02d}",
+                    "open": 10.0,
+                    "high": 11.0,
+                    "low": 9.0,
+                    "close": 10.5,
+                    "volume": 1000,
+                    "amount": None,
+                    "pct_chg": None,
+                }
+                for day in range(14, 32)
+            ]
+            rows.append(
+                {
+                    "date": "2026-01-01",
+                    "open": 11.0,
+                    "high": 12.0,
+                    "low": 10.0,
+                    "close": 11.5,
+                    "volume": 1200,
+                    "amount": None,
+                    "pct_chg": None,
+                }
+            )
+            rows.append(
+                {
+                    "date": "2026-01-02",
+                    "open": 12.0,
+                    "high": 13.0,
+                    "low": 11.0,
+                    "close": 12.5,
+                    "volume": 1300,
+                    "amount": None,
+                    "pct_chg": None,
+                }
+            )
+            return rows, {"status": "ok", "source": "unit-test", "rows": len(rows), "saved_rows": len(rows)}
+
+        original_quote = RunnerContextBuilder._fetch_realtime_quote
+        original_fundamental = RunnerContextBuilder._fetch_fundamental_context
+        original_information = RunnerContextBuilder._fetch_information_context
+        builder._fetch_daily_rows = fake_fetch_daily_rows
+        RunnerContextBuilder._fetch_realtime_quote = staticmethod(
+            lambda symbol, **_: {"price": 11.6, "source": "unit-test", "name": symbol}
+        )
+        RunnerContextBuilder._fetch_fundamental_context = staticmethod(
+            lambda *, symbol, live_data: {"status": "ok"}
+        )
+        RunnerContextBuilder._fetch_information_context = staticmethod(
+            lambda *, symbol, stock_name, live_data, run=None: {"status": "ok", "results_count": 1}
+        )
+        try:
+            fact = builder._symbol_facts(
+                symbol="AAPL",
+                live_data=True,
+                trade_date=date(2026, 1, 2),
+            )
+        finally:
+            RunnerContextBuilder._fetch_realtime_quote = staticmethod(original_quote)
+            RunnerContextBuilder._fetch_fundamental_context = staticmethod(original_fundamental)
+            RunnerContextBuilder._fetch_information_context = staticmethod(original_information)
+
+        self.assertEqual(calls, [("AAPL", 260, date(2026, 1, 2))])
+        self.assertEqual(fact["market_data"]["daily_bars_source"], "unit-test")
+        self.assertEqual(fact["market_data"]["daily_bars_latest_date"], "2026-01-02")
+        self.assertFalse(fact["market_data"]["daily_bars_stale_for_trade_date"])
+        self.assertEqual(fact["data_quality"]["layer_status"]["market_data"], "ok")
+
+    def test_symbol_facts_uses_provisional_realtime_bar_when_daily_refresh_stays_stale(self) -> None:
+        class FakeStockRepo:
+            def get_latest(self, _symbol: str, days: int = 2) -> list[SimpleNamespace]:
+                return [
+                    SimpleNamespace(
+                        date=date(2026, 1, 1),
+                        open=10.0,
+                        high=11.0,
+                        low=9.0,
+                        close=10.5,
+                        volume=1000,
+                        amount=None,
+                        pct_chg=None,
+                    )
+                    for _ in range(days)
+                ]
+
+        builder = RunnerContextBuilder(
+            service=self.service,
+            portfolio_service=PortfolioService(),
+            stock_repo=FakeStockRepo(),
+        )
+        builder._fetch_daily_rows = lambda **_: ([], {"status": "failed", "error": "stale providers"})
+
+        original_quote = RunnerContextBuilder._fetch_realtime_quote
+        original_fundamental = RunnerContextBuilder._fetch_fundamental_context
+        original_information = RunnerContextBuilder._fetch_information_context
+        RunnerContextBuilder._fetch_realtime_quote = staticmethod(
+            lambda symbol, **_: {
+                "price": 11.6,
+                "open_price": 11.0,
+                "high": 12.0,
+                "low": 10.8,
+                "volume": 1500,
+                "change_pct": 4.1,
+                "source": "unit-test",
+                "name": symbol,
+            }
+        )
+        RunnerContextBuilder._fetch_fundamental_context = staticmethod(
+            lambda *, symbol, live_data: {"status": "ok"}
+        )
+        RunnerContextBuilder._fetch_information_context = staticmethod(
+            lambda *, symbol, stock_name, live_data, run=None: {"status": "ok", "results_count": 1}
+        )
+        try:
+            fact = builder._symbol_facts(
+                symbol="AAPL",
+                live_data=True,
+                trade_date=date(2026, 1, 2),
+            )
+        finally:
+            RunnerContextBuilder._fetch_realtime_quote = staticmethod(original_quote)
+            RunnerContextBuilder._fetch_fundamental_context = staticmethod(original_fundamental)
+            RunnerContextBuilder._fetch_information_context = staticmethod(original_information)
+
+        self.assertEqual(fact["market_data"]["daily_bars_latest_date"], "2026-01-02")
+        self.assertFalse(fact["market_data"]["daily_bars_stale_for_trade_date"])
+        self.assertTrue(fact["market_data"]["daily_bars_official_stale_for_trade_date"])
+        self.assertTrue(fact["market_data"]["daily_bars_trade_date_provisional"])
+        self.assertEqual(
+            fact["market_data"]["daily_bars_trade_date_provisional_source"],
+            "realtime_quote:unit-test",
+        )
+        self.assertEqual(fact["daily_bars"][-1]["date"], "2026-01-02")
+        self.assertTrue(fact["daily_bars"][-1]["provisional"])
+        self.assertEqual(fact["data_quality"]["layer_status"]["market_data"], "partial")
+
+    def test_us_symbol_facts_use_intraday_cutoff_before_regular_close(self) -> None:
+        class FakeStockRepo:
+            def get_latest(self, _symbol: str, days: int = 2) -> list[SimpleNamespace]:
+                rows = [
+                    SimpleNamespace(
+                        date=date(2025, 12, day),
+                        open=10.0,
+                        high=11.0,
+                        low=9.0,
+                        close=10.0,
+                        volume=1000,
+                        amount=None,
+                        pct_chg=None,
+                    )
+                    for day in range(13, 32)
+                ]
+                rows.append(
+                    SimpleNamespace(
+                        date=date(2026, 1, 1),
+                        open=10.0,
+                        high=11.0,
+                        low=9.0,
+                        close=10.0,
+                        volume=1000,
+                        amount=None,
+                        pct_chg=None,
+                    )
+                )
+                rows.append(
+                    SimpleNamespace(
+                        date=date(2026, 1, 2),
+                        open=90.0,
+                        high=110.0,
+                        low=80.0,
+                        close=99.0,
+                        volume=9999,
+                        amount=None,
+                        pct_chg=None,
+                    )
+                )
+                return list(reversed(rows))
+
+        builder = RunnerContextBuilder(
+            service=self.service,
+            portfolio_service=PortfolioService(),
+            stock_repo=FakeStockRepo(),
+        )
+        builder._fetch_intraday_cutoff = lambda **_: {
+            "status": "ok",
+            "source": "ibkr_intraday_1m",
+            "symbol": "AAPL",
+            "trade_date": "2026-01-02",
+            "cutoff_at": "2026-01-02T09:40:00",
+            "bar_count": 3,
+            "first_bar_at": "2026-01-02 09:38:00",
+            "last_bar_at": "2026-01-02 09:40:00",
+            "window_open": 10.2,
+            "window_high": 12.4,
+            "window_low": 10.1,
+            "window_close": 12.0,
+            "window_volume": 3000,
+            "window_amount": 36000,
+            "last_bar": {"timestamp": "2026-01-02 09:40:00", "close": 12.0},
+            "recent_bars": [],
+        }
+
+        original_quote = RunnerContextBuilder._fetch_realtime_quote
+        original_fundamental = RunnerContextBuilder._fetch_fundamental_context
+        original_information = RunnerContextBuilder._fetch_information_context
+        RunnerContextBuilder._fetch_realtime_quote = staticmethod(
+            lambda symbol, **_: {"price": 99.0, "source": "should-not-be-used"}
+        )
+        RunnerContextBuilder._fetch_fundamental_context = staticmethod(
+            lambda *, symbol, live_data: {"status": "ok"}
+        )
+        RunnerContextBuilder._fetch_information_context = staticmethod(
+            lambda *, symbol, stock_name, live_data, run=None: {"status": "ok", "results_count": 1}
+        )
+        try:
+            fact = builder._symbol_facts(
+                symbol="AAPL",
+                live_data=True,
+                run={"market": "us"},
+                trade_date=date(2026, 1, 2),
+                data_cutoff_at=datetime(2026, 1, 2, 9, 40),
+            )
+        finally:
+            RunnerContextBuilder._fetch_realtime_quote = staticmethod(original_quote)
+            RunnerContextBuilder._fetch_fundamental_context = staticmethod(original_fundamental)
+            RunnerContextBuilder._fetch_information_context = staticmethod(original_information)
+
+        self.assertEqual(fact["market_data"]["realtime_quote"]["source"], "ibkr_intraday_1m")
+        self.assertEqual(fact["market_data"]["realtime_quote_semantics"], "point_in_time_intraday_cutoff")
+        self.assertEqual(fact["market_data"]["daily_bars_trade_date_provisional_source"], "ibkr_intraday_1m_cutoff")
+        self.assertEqual(fact["daily_bars"][-1]["close"], 12.0)
+        self.assertTrue(fact["daily_bars"][-1]["partial_intraday"])
+        self.assertEqual(fact["technical_context"]["current_price"], 12.0)
+        self.assertEqual(fact["data_quality"]["layer_status"]["market_data"], "ok")
+
+    def test_cycle_marks_codex_research_when_information_search_fails(self) -> None:
+        run = self.service.create_run(
+            name="Runner Codex 补搜",
+            symbols=["600519"],
+            start_date=date(2026, 1, 2),
+        )
+        context_dir = Path(self.temp_dir.name) / "contexts"
+        builder = RunnerContextBuilder(
+            service=self.service,
+            portfolio_service=PortfolioService(),
+            stock_repo=StockRepository(self.db),
+        )
+
+        original_quote = RunnerContextBuilder._fetch_realtime_quote
+        original_fundamental = RunnerContextBuilder._fetch_fundamental_context
+        original_information = RunnerContextBuilder._fetch_information_context
+
+        def fake_fundamental(*, symbol: str, live_data: bool) -> dict:
+            return {"status": "ok", "symbol": symbol}
+
+        def fake_information(*, symbol: str, stock_name: str, live_data: bool, run: dict | None = None) -> dict:
+            return {
+                "query": f"{stock_name} {symbol} 股票 最新消息",
+                "success": False,
+                "error": "所有搜索引擎都不可用或搜索失败",
+            }
+
+        RunnerContextBuilder._fetch_realtime_quote = staticmethod(
+            lambda symbol, **_: {"price": 100.0, "source": "unit-test", "name": "贵州茅台"}
+        )
+        RunnerContextBuilder._fetch_fundamental_context = staticmethod(fake_fundamental)
+        RunnerContextBuilder._fetch_information_context = staticmethod(fake_information)
+        try:
+            result = builder.build_cycle(
+                run_id=run["id"],
+                phase="morning",
+                trade_date=date(2026, 1, 2),
+                observation_time="09:40:00",
+                context_dir=context_dir,
+                live_data=True,
+            )
+        finally:
+            RunnerContextBuilder._fetch_realtime_quote = staticmethod(original_quote)
+            RunnerContextBuilder._fetch_fundamental_context = staticmethod(original_fundamental)
+            RunnerContextBuilder._fetch_information_context = staticmethod(original_information)
+
+        short_context = next(item for item in result["generated"] if item["profile_key"] == "short")
+        payload = json.loads(Path(short_context["context_json"]).read_text(encoding="utf-8"))
+        markdown = Path(short_context["context_markdown"]).read_text(encoding="utf-8")
+        fact = payload["evidence"]["symbol_facts"]["600519"]
+        fallback = fact["codex_research_fallback"]
+
+        self.assertTrue(payload["evidence"]["codex_research_policy"]["enabled"])
+        self.assertEqual(fallback["status"], "recommended")
+        self.assertEqual(fallback["reason"], "information_context_error")
+        self.assertIn("贵州茅台 600519 最新消息 公告", fallback["queries"])
+        self.assertIn("## Codex Supplemental Research", markdown)
+        self.assertIn("600519 贵州茅台: information_context_error", markdown)
 
     def test_close_cycle_uses_self_review_contract_without_observation(self) -> None:
         run = self.service.create_run(
@@ -263,7 +724,7 @@ class AgentBacktestRunnerTestCase(unittest.TestCase):
 
         original_fetch = RunnerContextBuilder._fetch_realtime_quote
         RunnerContextBuilder._fetch_realtime_quote = staticmethod(
-            lambda symbol: {"price": 12.0, "source": "unit-test", "name": "贵州茅台"}
+            lambda symbol, **_: {"price": 12.0, "source": "unit-test", "name": "贵州茅台"}
         )
         try:
             result = builder.build_cycle(

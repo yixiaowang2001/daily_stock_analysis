@@ -85,6 +85,7 @@ def create_run(
             initial_cash_per_agent=request.initial_cash_per_agent,
             max_observations_per_day=request.max_observations_per_day,
             rule_version=request.rule_version,
+            market=request.market,
             config=request.config,
             profiles=[p.dict() for p in request.profiles] if request.profiles is not None else None,
         )
@@ -103,15 +104,18 @@ def create_run(
 )
 def list_runs(
     status: Optional[str] = Query(None, description="Optional run status"),
+    market: Optional[str] = Query(None, description="Optional market namespace: cn or us"),
     limit: int = Query(50, ge=1, le=200),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> AgentBacktestRunListResponse:
     try:
-        data = _service(db_manager).list_runs(status=status, limit=limit)
+        data = _service(db_manager).list_runs(status=status, market=market, limit=limit)
         return AgentBacktestRunListResponse(
             total=int(data.get("total", 0)),
             items=[AgentBacktestRunItem(**item) for item in data.get("items", [])],
         )
+    except AgentBacktestError as exc:
+        raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("List agent backtest runs failed", exc)
 

@@ -238,7 +238,7 @@ def format_tail_review_context_message(bundle: Dict[str, Any]) -> str:
         "## 对话/参数快照",
         json.dumps(bundle.get("param_snapshot") or {}, ensure_ascii=False, indent=2),
         "",
-        "## 次日早盘冲高（相对昨收 %；自动拉取为 9:30–10:01 五分钟 K 或日线回退）",
+        "## 次日早盘冲高（相对昨收 %；自动拉取为 9:30–10:01 五分钟 K、1分钟多源回退或日线回退）",
         json.dumps(bundle.get("morning_metrics") or [], ensure_ascii=False, indent=2),
     ]
     layer2_calibration = bundle.get("layer2_calibration")

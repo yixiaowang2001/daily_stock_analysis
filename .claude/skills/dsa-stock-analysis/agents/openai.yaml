@@ -1,4 +1,4 @@
 interface:
   display_name: "DSA 股票分析与记忆"
   short_description: "用 DSA 拉取事实，逐票分析并保存时点研究结论。"
-  default_prompt: "Use $dsa-stock-analysis to refresh DSA facts for these stocks, analyze short/mid/long views and key levels, and save time-aware Agent notes when concrete levels are produced."
+  default_prompt: "Use $dsa-stock-analysis to refresh DSA facts for these stocks, use Codex external fallback for missing news or stock facts with source labels, analyze short/mid/long views and key levels, and save time-aware Agent notes when concrete levels are produced."

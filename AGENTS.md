@@ -32,7 +32,7 @@
 - 仓库协作 skill 存放在 `.claude/skills/`，分析产物存放在 `.claude/reviews/`；前者可以入库，后者默认视为本地产物。
 - 根目录 `SKILL.md` 与 `docs/openclaw-skill-integration.md` 属于产品或外部集成说明，不是仓库协作规则真源。
 - `.agents/skills/` 如在本地出现，只能作为 `.claude/skills/` 的本地镜像或适配目录；默认忽略，不作为第二真源手工维护。
-- 股票相关 skill 接入关系见 `docs/agent-skill-integration.md`：`dsa-stock-analysis` 用于单票/持仓/小批量逐票分析与历史点位回看，`dsa-watchlist-daily-review` 用于收盘后关注列表复盘、三周期排序与自动化输出，`dsa-candidate-lab` 用于候选池策略实验，`tail-picking-agent` 仅保留尾盘兼容入口。
+- 股票相关 skill 接入关系见 `docs/agent-skill-integration.md`：`dsa-stock-analysis` 用于单票/持仓/小批量逐票分析与历史点位回看，`dsa-watchlist-daily-review` 用于收盘后关注列表复盘、三周期排序与自动化输出，`dsa-candidate-lab` 用于候选池策略实验，`dsa-codex-information-fallback` 用于资讯/搜索缺口下的 Codex 外部兜底证据规范，`tail-picking-agent` 仅保留尾盘兼容入口。
 - 若未来新增其他 agent 专用目录，必须先明确单一真源，再通过脚本或镜像同步；禁止手工长期维护多份同义内容。
 - 修改 AI 协作治理资产时，执行：
 
@@ -216,9 +216,11 @@ gh run view <run_id> --log-failed
   - `.claude/skills/fix-issue/SKILL.md`
   - `.claude/skills/dsa-stock-analysis/SKILL.md`：单只股票、小批量非策略股票逐票分析、单个持仓、成本价下的持有/减仓/止损判断与历史点位回看。
   - `.claude/skills/dsa-watchlist-daily-review/SKILL.md`：收盘后关注列表复盘，拉取 DSA 事实与分钟证据，按短线/中线/长线排序并输出建仓、目标、止损区间，适合定时自动化调用。
+  - `.claude/skills/dsa-codex-information-fallback/SKILL.md`：当资讯搜索、公告、新闻、情绪或公开事件证据缺失/过期/失败时，规范 Codex 外部兜底来源优先级、数据截点与结构化证据标注。
   - `.claude/skills/tail-picking-agent/SKILL.md`：尾盘选股兼容入口；新候选池策略逻辑优先使用 `dsa-candidate-lab`。
 - 如果任务明确是 issue 分析、PR 审查、issue 修复，优先按对应 skill 执行，并将产物保存到 `.claude/reviews/`。
 - 如果任务是普通单票问股、小批量逐票分析或持仓判断，优先按 `dsa-stock-analysis` 执行；如果任务是收盘后关注列表复盘、每日自动化排序或三周期 watchlist 排名，优先按 `dsa-watchlist-daily-review` 执行；如果任务是多候选池评分、策略实验、尾盘战术台或复盘学习，优先按 `dsa-candidate-lab` / `tail-picking-agent` 边界执行。
+- 股票相关 skill 统一采用 DSA provider 优先、Codex 外部信息获取兜底：Bocha、SearXNG、Tavily、Brave、SerpAPI、MiniMax、Anspire、Iwencai 等新闻搜索接口失败或结果为空时，Codex 可以补充公开新闻/公告/行业信息；行情、K 线、分钟证据、早盘指标或公开基本面缺失时也可以用 Codex 外部来源核验。所有兜底事实必须标注为 `Codex 外部兜底`，写明来源、获取时间、数据截点和未验证缺口，不能伪装成 DSA provider 正常返回或默认写入 DSA 数据库；涉及系统化资讯兜底时按 `dsa-codex-information-fallback` 执行。
 - skill 中的命令、模板、验证顺序和交付结构必须与 `AGENTS.md` 保持一致。
 - skill 默认优先读取 CI / 工作流证据，再决定是否补本地验证。
 - skill 不得默认执行 `git pull`、`git push`、`git tag`、`gh pr create` 等会改变远端或当前分支状态的操作；这些操作必须要求用户确认。

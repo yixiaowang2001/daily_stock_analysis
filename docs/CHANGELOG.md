@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [新功能] Agent 回测支持 `market=us` 美股现金账户三操盘手实验，默认生成美股短线/中线/长线隔离 profile，并执行 USD、整股、settled cash、卖出资金 T+1 美股工作日释放和滚动 5 个美股工作日最多 1 次日内回转的硬规则。
+- [改进] 美股 Agent 回测默认 profile 名称移除“美股”前缀，并将默认节奏调整为开盘、下午、收盘复盘和盘外/隔夜四段。
+- [新功能] 美股行情接入独立 fallback 顺序，新增 Longbridge / Massive(Polygon) / Twelve Data / Finnhub / Alpha Vantage / yfinance 优先级配置与 key 示例，不影响 A 股数据源。
+- [新功能] 美股行情 fallback 新增 IBKR Gateway 数据源，可通过本机 API 端口读取美股日线与行情快照，并在 Gateway 不在线时自动让位给后续数据源。
+- [新功能] Agent 回测美股上下文新增 IBKR 历史 1 分钟 K 的 `intraday_cutoff` 证据，盘中回放优先使用 cutoff 前最后一根分钟 bar 生成 point-in-time quote，避免事后实时价污染历史节点。
+- [改进] 美股 `fundamental_context` 接入 Alpha Vantage company overview 与 Finnhub profile/metric 快照，新增独立远程 provider 超时预算，未配置 key 或接口失败时保持 fail-open，并标注其不是严格 point-in-time 基本面。
+- [chore] 新增仓库级 `dsa-codex-information-fallback` skill，沉淀 Agent 回测/股票分析资讯层缺口下的 Codex 外部兜底来源优先级、截点约束与结构化证据契约。
+- [修复] 美股 Agent 回测在 IBKR Gateway 端口可连但行情请求超时或无回包时增加进程内冷却降级，避免整轮看盘逐标的重复等待 IBKR 超时；同时修正单一 USD 组合快照根层币种仍显示 CNY 的问题。
+- [改进] 美股 Agent 回测 1 分钟历史 K 新增独立 `US_INTRADAY_DATA_SOURCE_PRIORITY`，默认优先使用 Massive/Polygon 与 Twelve Data 生成 `intraday_cutoff`，IBKR 历史接口降为有 Level 1 订阅时的增强源。
+- [改进] 美股 Agent 回测 1 分钟历史 K 新增本地缓存目录 `US_INTRADAY_CACHE_DIR`，同一交易日多时间点回放会复用已覆盖 cutoff 的分钟 rows，减少 provider 429 限流风险。
+- [改进] 美股 Agent 回测 1 分钟历史 K 外部 provider 返回 HTTP 429 时增加可配置退避重试 `US_INTRADAY_429_RETRY_SECONDS`。
+- [改进] 美股实时行情新增 `US_REALTIME_STOP_AFTER_BASIC_QUOTE` 快速返回开关，可在获取基础 live quote 后停止补字段，减少 Twelve Data / Finnhub 等外部 API 请求量。
+- [改进] Agent 回测 runner 的实时行情子进程超时复用 `IBKR_TIMEOUT_SECONDS`，避免 IBKR Gateway 快照在固定 8 秒保护下被过早截断。
+- [改进] 操盘页面新增 A 股 / 美股切换，按 `market` 过滤实验列表并展示对应市场说明与货币提示。
+- [改进] Agent 回测 runner 为美股上下文加入现金账户状态、盘外/隔夜风险约束和 Codex-first 资讯补搜策略，默认不先消耗 Tavily / Brave / SerpAPI 等搜索 provider 配额。
+- [测试] 新增美股 Agent 回测单元测试，覆盖 US run 隔离配置、整股限制、settled cash T+1 释放、日内回转限额和前端市场切换。
 - [新功能] 新增 Agent 回测实验 API：支持为 A 股关注列表创建短线/中线/长线三个隔离操盘手账户，记录观察、决策、订单、成交、策略版本演进与每日净值，并在成交落账时执行 100 股整数手、T+1 卖出和买入现金校验。
 - [新功能] 新增 Codex 专用 Agent 回测 runner：`scripts/run_agent_backtest_cycle.py` 可创建实验、生成短/中/长隔离决策上下文、写回 Codex 决策、记录订单成交并生成每日净值快照。
 - [新功能] 新增 Codex 自动化操盘任务，按 `0940看盘`、`1030看盘`、`1120看盘`、`1335看盘`、`1440看盘` 触发三操盘手隔离复盘，并在 16:05 `收盘复盘` 记录净值与自评；保留本地 Codex CLI 定时脚本作为备用方案。
@@ -27,11 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Agent 回测 Codex runner 将关注池与持仓解耦：已移出股票池但仍持有的标的会作为 `exit_only_symbols` 继续进入对应操盘手上下文，可持有、减仓或卖出，但不会作为重新买入候选。
 - [改进] Agent 回测 Codex runner 将看盘数据升级为 profile-neutral 统一事实包：研究全集覆盖关注池与所有 active 操盘手持仓标的，每个 profile 获得同一份行情、技术、基本面、资讯和情绪层 `symbol_facts`，再由短/中/长策略自行选择权重。
 - [改进] Agent 回测 Codex 自动化调整为 09:40、10:30、11:20、13:35、14:40 五次看盘决策和 16:05 收盘复盘；每次看盘允许 `observe` / `hold`，不要求操盘手必须交易，收盘复盘可将操盘手自评沉淀为前向策略版本。
+- [改进] Agent 回测上下文新增 `codex_research_fallback`，当内置资讯搜索失败或结果为空时提示 Codex 自动化用自身联网搜索补齐公开信息并在决策/总结中记录来源。
 - [改进] 操盘手详情弹窗加宽并将持仓明细改为横向表格，默认展示最新策略正文，支持只读切换历史策略版本，并新增历史决策模块与彩色决策动作标签。
 - [改进] 操盘手详情弹窗新增左右侧切换按钮与键盘方向键切换，打开详情后可连续浏览所有 active 操盘手。
 - [修复] 操盘手详情弹窗策略版本按钮与下拉菜单改为小字号，并修正夜间模式下选中项白底过亮。
 - [文档] 新增 Agent 回测实验台说明，并在完整指南中补充 `/api/v1/agent-backtest` 接口入口与示例。
 - [文档] 完善 DSA Agent Skill 接入说明，明确 `dsa-stock-analysis`、`dsa-watchlist-daily-review`、`dsa-candidate-lab`、`tail-picking-agent` 与“操盘”Codex 自动化的边界。
+- [改进] 股票相关 skill 与事实采集脚本明确 Codex 外部信息兜底：新闻搜索 provider 或股票数据源失败时可由 Codex 补充公开事实，并要求标注来源、截点与未验证缺口。
+- [chore] 补齐仓库级 issue/PR 修复类 skill 的标准 frontmatter，并将根目录 `SKILL.md` 名称规范为 hyphen-case。
 - [测试] 新增 Agent 回测服务与 runner 单元测试，覆盖隔离账户创建、上下文隔离、每日观察次数限制、A 股整数手/T+1 约束、策略版本演进和决策写回。
 - [修复] Agent chat API 允许测试和内部调用不传 FastAPI `Request` 对象时回退到普通聊天路径，避免直接调用 endpoint 函数触发参数缺失错误。
 - [新功能] 新增同花顺问财 OpenAPI 低优先级兜底：配置 `IWENCAI_API_KEY` 后，实时行情与新闻搜索在常规数据源失败时才尝试问财，并通过本地每日调用计数保护 100 次/天共享额度。
@@ -57,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [测试] 尾盘测试覆盖普通 Agent 聊天自动归档、去重更新，以及显式评分/复盘上下文写回实验。
 - [文档] 新增 [尾盘战术台说明](docs/tail-tactics-workbench.md)，并在 `docs/full-guide.md` 本地 WebUI 段加入口指引。
 - [测试] `tests/test_tail_tactics_api.py` 覆盖战术台策略版本 diff、**策略版本删除（409/204）**、实验 compose、早盘指标与 auto-fetch（mock）。
+- [修复] 尾盘战术台早盘指标自动拉取在东财分钟接口失败时复用 1 分钟多源 fallback，并在已有 `no_t1_bar` / 空指标时自动重试，避免上午复盘被临时数据缺口锁死。
 - [修复] 问股 Agent 在未配置可用 LLM 时保留后端真实错误原因并维持 `done.success=false` 失败语义，避免前端把配置缺失误当成成功回答。
 - [文档] 补充 LLM 配置指南与 FAQ，明确问股 Agent 对 `LITELLM_CONFIG` / `LLM_CHANNELS` / legacy `GEMINI_*` `OPENAI_*` `ANTHROPIC_*` 的兼容优先级、回退路径与“不静默迁移旧配置”的结论。
 - [新功能] 尾盘战术台实验支持保存 `param_snapshot` 对话/参数快照，并将风控模式、验证周期、硬排除条件、评分权重与当日上下文传入 Agent 评分/复盘。

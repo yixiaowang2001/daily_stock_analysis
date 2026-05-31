@@ -172,6 +172,48 @@ def _previous_close(stock: Dict[str, Any], trade_date: date) -> Optional[float]:
     return candidates[-1]["close"]
 
 
+def _append_unique(items: List[str], value: str) -> List[str]:
+    if value not in items:
+        items.append(value)
+    return items
+
+
+def _merge_codex_research_fallback(
+    stock: Dict[str, Any],
+    *,
+    reason: str,
+    scope: str,
+) -> None:
+    fallback = stock.get("codex_research_fallback")
+    if not isinstance(fallback, dict):
+        fallback = {
+            "enabled": True,
+            "needed": False,
+            "reasons": [],
+            "allowed_scopes": [],
+        }
+
+    reasons = fallback.get("reasons") if isinstance(fallback.get("reasons"), list) else []
+    scopes = (
+        fallback.get("allowed_scopes")
+        if isinstance(fallback.get("allowed_scopes"), list)
+        else []
+    )
+    fallback["reasons"] = _append_unique([str(item) for item in reasons], reason)
+    fallback["allowed_scopes"] = _append_unique([str(item) for item in scopes], scope)
+    fallback["needed"] = bool(fallback["reasons"])
+    fallback["enabled"] = True
+    fallback.setdefault(
+        "policy",
+        (
+            "Codex may use external web/browser/finance research as fallback when DSA "
+            "providers cannot supply usable facts. Label source, timestamp, and cutoff "
+            "explicitly, and keep fallback facts separate from DSA-collected facts."
+        ),
+    )
+    stock["codex_research_fallback"] = fallback
+
+
 def _attach_intraday(payload: Dict[str, Any], *, trade_date: date, cutoff_time: str) -> None:
     from src.services.tail_intraday_fetch import fetch_tail_intraday_cutoff_evidence
 
@@ -182,12 +224,19 @@ def _attach_intraday(payload: Dict[str, Any], *, trade_date: date, cutoff_time: 
         if not code:
             continue
         try:
-            stock["post_close_intraday_evidence"] = fetch_tail_intraday_cutoff_evidence(
+            evidence = fetch_tail_intraday_cutoff_evidence(
                 symbol=code,
                 trade_date=trade_date,
                 selection_cutoff=cutoff_time,
                 previous_close=_previous_close(stock, trade_date),
             )
+            stock["post_close_intraday_evidence"] = evidence
+            if not isinstance(evidence, dict) or evidence.get("available") is False:
+                _merge_codex_research_fallback(
+                    stock,
+                    reason="minute_evidence_missing",
+                    scope="intraday price and volume cross-check",
+                )
         except Exception as exc:
             stock["post_close_intraday_evidence"] = {
                 "code": code,
@@ -196,6 +245,11 @@ def _attach_intraday(payload: Dict[str, Any], *, trade_date: date, cutoff_time: 
                 "fields": {},
                 "fallback_attempts": [],
             }
+            _merge_codex_research_fallback(
+                stock,
+                reason="minute_evidence_missing",
+                scope="intraday price and volume cross-check",
+            )
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:

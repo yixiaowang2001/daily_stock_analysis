@@ -25,6 +25,7 @@ import type {
 
 type ProfileFilter = 'all' | string;
 type TradingTheme = 'light' | 'dark';
+type MarketFilter = 'cn' | 'us';
 type TimelineType = 'observation' | 'decision' | 'order' | 'fill' | 'nav';
 type CurveMode = 'return' | 'equity';
 
@@ -75,6 +76,20 @@ type PositionItem = {
 };
 
 const PROFILE_ORDER = ['short', 'aggressive_short', 'medium', 'long'];
+const MARKET_META: Record<MarketFilter, { label: string; shortLabel: string; currency: string; description: string }> = {
+  cn: {
+    label: 'A股',
+    shortLabel: 'A',
+    currency: '¥',
+    description: 'A 股隔离操盘手的收益率与账户权益对比。每日 16:00 后用净值快照更新曲线。',
+  },
+  us: {
+    label: '美股',
+    shortLabel: 'US',
+    currency: '$',
+    description: '美股现金账户操盘手的收益率与账户权益对比，按 USD、T+1 settled cash 和盘外交易规则隔离。',
+  },
+};
 const PROFILE_META: Record<string, { label: string; color: string; shortLabel: string }> = {
   short: { label: '短线操盘手', color: '#2563eb', shortLabel: '短线' },
   aggressive_short: { label: '激进短线操盘手', color: '#e11d48', shortLabel: '激进短线' },
@@ -162,6 +177,10 @@ function formatCompactMoney(value: number | undefined | null): string {
   return numeric.toLocaleString('zh-CN', {
     maximumFractionDigits: 0,
   });
+}
+
+function getCurrencySymbol(market?: string | null): string {
+  return market === 'us' ? MARKET_META.us.currency : MARKET_META.cn.currency;
 }
 
 function formatSignedPct(value: number | undefined | null): string {
@@ -880,7 +899,7 @@ const AgentBacktestPage: React.FC = () => {
   }, []);
 
   const [theme, setTheme] = useState<TradingTheme>(() => getStoredTheme());
-  const [runs, setRuns] = useState<AgentBacktestRunItem[]>([]);
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>('cn');
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [run, setRun] = useState<AgentBacktestRunItem | null>(null);
   const [events, setEvents] = useState<AgentBacktestEventsResponse | null>(null);
@@ -902,15 +921,14 @@ const AgentBacktestPage: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const list = await agentBacktestApi.listRuns({ limit: 20 });
-      setRuns(list.items);
-      setSelectedRunId((current) => current ?? list.items[0]?.id ?? null);
+      const list = await agentBacktestApi.listRuns({ market: marketFilter, limit: 20 });
+      setSelectedRunId(list.items[0]?.id ?? null);
     } catch (err) {
       setError(getParsedApiError(err));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [marketFilter]);
 
   const loadRunDetail = useCallback(async (runId: number) => {
     setIsLoading(true);
@@ -936,6 +954,9 @@ const AgentBacktestPage: React.FC = () => {
   useEffect(() => {
     if (selectedRunId != null) {
       void loadRunDetail(selectedRunId);
+    } else {
+      setRun(null);
+      setEvents(null);
     }
   }, [loadRunDetail, selectedRunId]);
 
@@ -989,6 +1010,10 @@ const AgentBacktestPage: React.FC = () => {
     return dates.sort().at(-1) || '--';
   }, [events?.dailyNav]);
   const isReturnCurve = curveMode === 'return';
+  const marketMeta = MARKET_META[marketFilter];
+  const runMarketKey: MarketFilter = run?.market === 'us' ? 'us' : run?.market === 'cn' ? 'cn' : marketFilter;
+  const runMarketMeta = MARKET_META[runMarketKey];
+  const currencySymbol = getCurrencySymbol(run?.market || marketFilter);
   const selectAdjacentProfile = useCallback((direction: -1 | 1) => {
     if (selectedProfileIndex < 0 || profiles.length < 2) return;
     const nextIndex = (selectedProfileIndex + direction + profiles.length) % profiles.length;
@@ -1065,28 +1090,33 @@ const AgentBacktestPage: React.FC = () => {
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold leading-tight sm:text-3xl" style={{ color: 'var(--trade-fg)' }}>操盘</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--trade-muted)]">
-              隔离操盘手的收益率与账户权益对比。每日 16:00 后用净值快照更新曲线。
+              {marketMeta.description}
             </p>
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
-            <select
-              aria-label="选择操盘实验"
-              value={selectedRunId ?? ''}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                setSelectedRunId(Number.isFinite(next) ? next : null);
-                setProfileFilter('all');
-              }}
-              className="h-10 min-w-[220px] rounded-none border border-[var(--trade-border)] bg-[var(--trade-panel)] px-3 text-sm text-[var(--trade-fg)] outline-none transition-colors focus:border-[var(--trade-muted)]"
-            >
-              {runs.length === 0 ? <option value="">暂无实验</option> : null}
-              {runs.map((item) => (
-                <option key={item.id} value={item.id}>
-                  #{item.id} {item.name}
-                </option>
+            <div className="inline-flex h-10 border border-[var(--trade-border)] bg-[var(--trade-panel)]">
+              {(['cn', 'us'] as MarketFilter[]).map((market) => (
+                <button
+                  key={market}
+                  type="button"
+                  aria-pressed={marketFilter === market}
+                  onClick={() => {
+                    setMarketFilter(market);
+                    setSelectedRunId(null);
+                    setRun(null);
+                    setEvents(null);
+                    setProfileFilter('all');
+                    setPolicyVersionsByProfileKey({});
+                  }}
+                  className={`inline-flex items-center px-3 text-sm transition-colors ${
+                    marketFilter === market ? 'bg-[var(--trade-fg)] text-[var(--trade-bg)]' : 'text-[var(--trade-muted)] hover:bg-[var(--trade-hover)]'
+                  }`}
+                >
+                  {MARKET_META[market].label}
+                </button>
               ))}
-            </select>
+            </div>
             <button
               type="button"
               onClick={refresh}
@@ -1209,7 +1239,7 @@ const AgentBacktestPage: React.FC = () => {
                           boxShadow: 'none',
                         }}
                         formatter={(value, name) => [
-                          isReturnCurve ? formatSignedPct(Number(value)) : `¥${formatMoney(Number(value))}`,
+                          isReturnCurve ? formatSignedPct(Number(value)) : `${currencySymbol}${formatMoney(Number(value))}`,
                           getProfileMeta(String(name)).shortLabel,
                         ]}
                         labelFormatter={(label) => `日期 ${label}`}
@@ -1348,7 +1378,7 @@ const AgentBacktestPage: React.FC = () => {
               <dl className="grid grid-cols-2 gap-px bg-[var(--trade-border)] text-sm">
                 <div className="bg-[var(--trade-panel)] p-4">
                   <dt className="text-xs text-[var(--trade-muted)]">股票池</dt>
-                  <dd className="mt-1 font-medium">{run?.symbols.length ?? 0} 只 A 股</dd>
+                  <dd className="mt-1 font-medium">{run?.symbols.length ?? 0} 只 {runMarketMeta.label}</dd>
                 </div>
                 <div className="bg-[var(--trade-panel)] p-4">
                   <dt className="text-xs text-[var(--trade-muted)]">规则</dt>

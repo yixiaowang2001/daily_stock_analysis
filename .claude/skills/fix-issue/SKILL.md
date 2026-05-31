@@ -1,3 +1,8 @@
+---
+name: fix-issue
+description: "Fix a validated daily_stock_analysis issue with minimal scoped changes, validation evidence, docs/changelog updates, and fallback/fail-open preservation."
+---
+
 # Fix Issue
 
 基于 issue 分析结果实现修复，并按仓库规则补齐验证、风险与回滚说明。
@@ -32,6 +37,7 @@
 - 根据 issue 结论定位相关文件
 - 优先复用现有模块、配置入口、脚本和测试
 - 保持默认行为向后兼容，避免破坏 fallback / fail-open
+- 涉及股票新闻搜索、行情、K 线、分钟数据或候选池事实包时，保持 DSA provider 优先、Codex 外部信息获取兜底的语义：Bocha/SearXNG 等搜索失败或结果为空不应单独拖垮分析链路；兜底事实必须标注来源、截点与未验证缺口
 - 如果修复涉及用户可见行为、配置语义、CLI/API、部署、通知、报告结构，要同步更新相关文档、`docs/CHANGELOG.md`、`.env.example`
 - 向 `docs/CHANGELOG.md` 写入条目时，在 `[Unreleased]` 段追加一行，格式为 `- [类型] 描述`，其中 `[类型]` 从 `[新功能]/[改进]/[修复]/[文档]/[测试]/[chore]` 中按本次变更内容选择；只有修复 bug 时才使用 `[修复]`；**不要**在 `[Unreleased]` 内新增 `### 类目标题`
 - `README.md` 只承载项目定位、核心能力、快速开始、主要入口、赞助/合作等首页级信息；非必要不更新 README，避免持续膨胀

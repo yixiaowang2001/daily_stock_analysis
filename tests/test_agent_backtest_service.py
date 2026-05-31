@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from src.config import Config
 from src.services.agent_backtest_service import AgentBacktestError, AgentBacktestService
-from src.storage import DatabaseManager, PortfolioTrade
+from src.storage import DatabaseManager, PortfolioAccount, PortfolioTrade
 
 
 class AgentBacktestServiceTestCase(unittest.TestCase):
@@ -385,11 +385,11 @@ class AgentBacktestServiceTestCase(unittest.TestCase):
             run_id=run["id"],
             order_id=next_day_order["id"],
             quantity=100,
-            price=11.0,
-            filled_at=datetime(2026, 1, 3, 9, 43),
-            fee=0,
-            tax=0,
-        )
+                price=11.0,
+                filled_at=datetime(2026, 1, 3, 9, 43),
+                fee=0,
+                tax=0,
+            )
         self.assertIsNotNone(next_day_fill["portfolio_trade_id"])
 
         with self.db.get_session() as session:
@@ -397,6 +397,238 @@ class AgentBacktestServiceTestCase(unittest.TestCase):
                 select(PortfolioTrade).order_by(PortfolioTrade.id.asc())
             ).scalars().all()
         self.assertEqual([trade.side for trade in trades], ["buy", "sell"])
+
+    def test_create_us_run_uses_us_profiles_and_usd_accounts(self) -> None:
+        run = self.service.create_run(
+            name="美股现金账户实验",
+            market="us",
+            symbols=["aapl", "NVDA"],
+            start_date=date(2026, 1, 5),
+            initial_cash_per_agent=1000,
+        )
+
+        self.assertEqual(run["market"], "us")
+        self.assertEqual(run["rule_version"], "us_cash_ibkr_v1")
+        self.assertEqual(run["symbols"], ["AAPL", "NVDA"])
+        self.assertEqual(run["config"]["base_currency"], "USD")
+        self.assertEqual(run["config"]["cash_settlement"], "T+1")
+        self.assertEqual({p["profile_key"] for p in run["profiles"]}, {"short", "medium", "long"})
+        self.assertEqual(
+            {p["profile_key"]: p["display_name"] for p in run["profiles"]},
+            {"short": "短线操盘手", "medium": "中线操盘手", "long": "长线操盘手"},
+        )
+
+        with self.db.get_session() as session:
+            accounts = session.execute(select(PortfolioAccount)).scalars().all()
+        self.assertEqual({account.market for account in accounts}, {"us"})
+        self.assertEqual({account.base_currency for account in accounts}, {"USD"})
+
+    def test_us_run_requires_whole_shares(self) -> None:
+        run = self.service.create_run(
+            name="美股整股实验",
+            market="us",
+            symbols=["AAPL"],
+            start_date=date(2026, 1, 5),
+            initial_cash_per_agent=1000,
+        )
+
+        with self.assertRaisesRegex(AgentBacktestError, "whole-share"):
+            self.service.create_order(
+                run_id=run["id"],
+                profile_key="short",
+                symbol="AAPL",
+                side="buy",
+                order_type="limit",
+                requested_quantity=1.5,
+                limit_price=100.0,
+                submitted_at=datetime(2026, 1, 5, 9, 40),
+                effective_at=datetime(2026, 1, 5, 9, 41),
+            )
+
+    def test_us_cash_account_sell_proceeds_settle_next_business_day(self) -> None:
+        run = self.service.create_run(
+            name="美股现金结算实验",
+            market="us",
+            symbols=["AAPL", "NVDA"],
+            start_date=date(2026, 1, 5),
+            initial_cash_per_agent=100,
+        )
+        buy = self.service.create_order(
+            run_id=run["id"],
+            profile_key="short",
+            symbol="AAPL",
+            side="buy",
+            order_type="limit",
+            requested_quantity=1,
+            limit_price=100.0,
+            submitted_at=datetime(2026, 1, 5, 9, 40),
+            effective_at=datetime(2026, 1, 5, 9, 41),
+        )
+        self.service.record_fill(
+            run_id=run["id"],
+            order_id=buy["id"],
+            quantity=1,
+            price=100.0,
+            filled_at=datetime(2026, 1, 5, 9, 41),
+            fee=0,
+            tax=0,
+        )
+        sell = self.service.create_order(
+            run_id=run["id"],
+            profile_key="short",
+            symbol="AAPL",
+            side="sell",
+            order_type="limit",
+            requested_quantity=1,
+            limit_price=100.0,
+            submitted_at=datetime(2026, 1, 5, 10, 0),
+            effective_at=datetime(2026, 1, 5, 10, 1),
+        )
+        self.service.record_fill(
+            run_id=run["id"],
+            order_id=sell["id"],
+            quantity=1,
+            price=100.0,
+            filled_at=datetime(2026, 1, 5, 10, 1),
+            fee=0,
+            tax=0,
+        )
+
+        same_day_buy = self.service.create_order(
+            run_id=run["id"],
+            profile_key="short",
+            symbol="NVDA",
+            side="buy",
+            order_type="limit",
+            requested_quantity=1,
+            limit_price=100.0,
+            submitted_at=datetime(2026, 1, 5, 10, 30),
+            effective_at=datetime(2026, 1, 5, 10, 31),
+        )
+        with self.assertRaisesRegex(AgentBacktestError, "insufficient settled cash"):
+            self.service.record_fill(
+                run_id=run["id"],
+                order_id=same_day_buy["id"],
+                quantity=1,
+                price=100.0,
+                filled_at=datetime(2026, 1, 5, 10, 31),
+                fee=0,
+                tax=0,
+            )
+
+        next_business_day_buy = self.service.create_order(
+            run_id=run["id"],
+            profile_key="short",
+            symbol="NVDA",
+            side="buy",
+            order_type="limit",
+            requested_quantity=1,
+            limit_price=100.0,
+            submitted_at=datetime(2026, 1, 6, 9, 40),
+            effective_at=datetime(2026, 1, 6, 9, 41),
+        )
+        fill = self.service.record_fill(
+            run_id=run["id"],
+            order_id=next_business_day_buy["id"],
+            quantity=1,
+            price=100.0,
+            filled_at=datetime(2026, 1, 6, 9, 41),
+            fee=0,
+            tax=0,
+        )
+        self.assertIsNotNone(fill["portfolio_trade_id"])
+
+    def test_us_cash_account_limits_day_trades_to_one_per_window(self) -> None:
+        run = self.service.create_run(
+            name="美股日内回转实验",
+            market="us",
+            symbols=["AAPL", "NVDA"],
+            start_date=date(2026, 1, 5),
+            initial_cash_per_agent=1000,
+        )
+
+        first_buy = self.service.create_order(
+            run_id=run["id"],
+            profile_key="short",
+            symbol="AAPL",
+            side="buy",
+            order_type="limit",
+            requested_quantity=1,
+            limit_price=100.0,
+            submitted_at=datetime(2026, 1, 5, 9, 40),
+            effective_at=datetime(2026, 1, 5, 9, 41),
+        )
+        self.service.record_fill(
+            run_id=run["id"],
+            order_id=first_buy["id"],
+            quantity=1,
+            price=100.0,
+            filled_at=datetime(2026, 1, 5, 9, 41),
+            fee=0,
+            tax=0,
+        )
+        first_sell = self.service.create_order(
+            run_id=run["id"],
+            profile_key="short",
+            symbol="AAPL",
+            side="sell",
+            order_type="limit",
+            requested_quantity=1,
+            limit_price=105.0,
+            submitted_at=datetime(2026, 1, 5, 10, 0),
+            effective_at=datetime(2026, 1, 5, 10, 1),
+        )
+        self.service.record_fill(
+            run_id=run["id"],
+            order_id=first_sell["id"],
+            quantity=1,
+            price=105.0,
+            filled_at=datetime(2026, 1, 5, 10, 1),
+            fee=0,
+            tax=0,
+        )
+
+        second_buy = self.service.create_order(
+            run_id=run["id"],
+            profile_key="short",
+            symbol="NVDA",
+            side="buy",
+            order_type="limit",
+            requested_quantity=1,
+            limit_price=100.0,
+            submitted_at=datetime(2026, 1, 5, 10, 30),
+            effective_at=datetime(2026, 1, 5, 10, 31),
+        )
+        self.service.record_fill(
+            run_id=run["id"],
+            order_id=second_buy["id"],
+            quantity=1,
+            price=100.0,
+            filled_at=datetime(2026, 1, 5, 10, 31),
+            fee=0,
+            tax=0,
+        )
+        second_sell = self.service.create_order(
+            run_id=run["id"],
+            profile_key="short",
+            symbol="NVDA",
+            side="sell",
+            order_type="limit",
+            requested_quantity=1,
+            limit_price=105.0,
+            submitted_at=datetime(2026, 1, 5, 11, 0),
+            effective_at=datetime(2026, 1, 5, 11, 1),
+        )
+        with self.assertRaisesRegex(AgentBacktestError, "day-trade allowance already used"):
+            self.service.record_fill(
+                run_id=run["id"],
+                order_id=second_sell["id"],
+                quantity=1,
+                price=105.0,
+                filled_at=datetime(2026, 1, 5, 11, 1),
+                fee=0,
+                tax=0,
+            )
 
     def test_policy_evolution_updates_only_current_profile_policy(self) -> None:
         run = self.service.create_run(
