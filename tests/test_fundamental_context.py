@@ -39,6 +39,64 @@ class _DummyBoardFetcher:
         return self._boards
 
 
+class _DummyTushareFundamentalFetcher:
+    name = "TushareFetcher"
+    priority = -1
+
+    def __init__(self):
+        self.calls = 0
+
+    def is_available(self):
+        return True
+
+    def get_fundamental_bundle(self, _stock_code: str):
+        self.calls += 1
+        return {
+            "status": "partial",
+            "valuation": {
+                "trade_date": "2026-03-17",
+                "close": 100.0,
+                "pe_ratio": 20.0,
+                "pb_ratio": 3.0,
+                "total_mv": 1.2e11,
+                "circ_mv": 1.0e11,
+            },
+            "growth": {
+                "report_date": "2025-12-31",
+                "revenue_yoy": 8.0,
+                "net_profit_yoy": 12.0,
+                "roe": 30.0,
+            },
+            "earnings": {
+                "financial_report": {
+                    "report_date": "2025-12-31",
+                    "revenue": 900.0,
+                    "net_profit_parent": 300.0,
+                    "operating_cash_flow": 280.0,
+                },
+                "dividend": {
+                    "ttm_cash_dividend_per_share": 2.5,
+                    "events": [{"event_date": "2026-01-01", "cash_dividend_per_share": 2.5}],
+                },
+            },
+            "institution": {},
+            "source_chain": ["valuation:tushare_daily_basic", "growth:tushare_fina_indicator"],
+            "errors": [],
+        }
+
+
+def _no_tushare_bundle():
+    return {
+        "status": "not_supported",
+        "valuation": {},
+        "growth": {},
+        "earnings": {},
+        "institution": {},
+        "source_chain": [],
+        "errors": [],
+    }
+
+
 class TestFundamentalContext(unittest.TestCase):
     def test_hk_market_returns_not_supported(self) -> None:
         manager = DataFetcherManager(fetchers=[])
@@ -206,6 +264,7 @@ class TestFundamentalContext(unittest.TestCase):
             source=SimpleNamespace(value="tencent"),
         )
         with patch("src.config.get_config", return_value=cfg), \
+                patch.object(manager, "_get_tushare_fundamental_bundle", return_value=_no_tushare_bundle()), \
                 patch.object(manager, "get_realtime_quote", return_value=quote), \
                 patch("data_provider.fundamental_adapter.AkshareFundamentalAdapter.get_fundamental_bundle", return_value={
                     "growth": {"revenue_yoy": 10.1, "net_profit_yoy": 8.5},
@@ -223,6 +282,34 @@ class TestFundamentalContext(unittest.TestCase):
         self.assertIn("growth", ctx)
         self.assertIn("capital_flow", ctx)
         self.assertIn("dragon_tiger", ctx)
+
+    def test_fundamental_context_prefers_tushare_financial_bundle(self) -> None:
+        tushare = _DummyTushareFundamentalFetcher()
+        manager = DataFetcherManager(fetchers=[tushare])
+        cfg = SimpleNamespace(
+            enable_fundamental_pipeline=True,
+            fundamental_cache_ttl_seconds=0,
+            fundamental_stage_timeout_seconds=1.5,
+            fundamental_fetch_timeout_seconds=0.8,
+            fundamental_retry_max=1,
+        )
+        with patch("src.config.get_config", return_value=cfg), \
+                patch.object(manager, "get_realtime_quote", side_effect=AssertionError("quote should not be called")), \
+                patch("data_provider.fundamental_adapter.AkshareFundamentalAdapter.get_fundamental_bundle") as akshare_bundle, \
+                patch.object(manager, "get_capital_flow_context", return_value={"status": "not_supported", "source_chain": []}), \
+                patch.object(manager, "get_dragon_tiger_context", return_value={"status": "not_supported", "source_chain": []}), \
+                patch.object(manager, "get_board_context", return_value={"status": "not_supported", "source_chain": []}):
+            ctx = manager.get_fundamental_context("600519", budget_seconds=1.5)
+
+        self.assertEqual(tushare.calls, 1)
+        akshare_bundle.assert_not_called()
+        self.assertEqual(ctx["coverage"]["valuation"], "ok")
+        self.assertEqual(ctx["coverage"]["growth"], "ok")
+        self.assertEqual(ctx["coverage"]["earnings"], "ok")
+        self.assertEqual(ctx["valuation"]["data"]["pe_ratio"], 20.0)
+        self.assertEqual(ctx["growth"]["data"]["revenue_yoy"], 8.0)
+        self.assertEqual(ctx["earnings"]["data"]["financial_report"]["net_profit_parent"], 300.0)
+        self.assertAlmostEqual(ctx["earnings"]["data"]["dividend"]["ttm_dividend_yield_pct"], 2.5)
 
     def test_fundamental_context_derives_ttm_dividend_yield_from_quote_price(self) -> None:
         manager = DataFetcherManager(fetchers=[])
@@ -242,6 +329,7 @@ class TestFundamentalContext(unittest.TestCase):
             source=SimpleNamespace(value="tencent"),
         )
         with patch("src.config.get_config", return_value=cfg), \
+                patch.object(manager, "_get_tushare_fundamental_bundle", return_value=_no_tushare_bundle()), \
                 patch.object(manager, "get_realtime_quote", return_value=quote), \
                 patch("data_provider.fundamental_adapter.AkshareFundamentalAdapter.get_fundamental_bundle", return_value={
                     "status": "partial",
@@ -284,6 +372,7 @@ class TestFundamentalContext(unittest.TestCase):
             source=SimpleNamespace(value="tencent"),
         )
         with patch("src.config.get_config", return_value=cfg), \
+                patch.object(manager, "_get_tushare_fundamental_bundle", return_value=_no_tushare_bundle()), \
                 patch.object(manager, "get_realtime_quote", return_value=quote), \
                 patch("data_provider.fundamental_adapter.AkshareFundamentalAdapter.get_fundamental_bundle", return_value={
                     "status": "partial",
@@ -346,6 +435,7 @@ class TestFundamentalContext(unittest.TestCase):
             return {"status": "not_supported", "source_chain": [], "errors": [], "data": {}}
 
         with patch("src.config.get_config", return_value=cfg), \
+                patch.object(manager, "_get_tushare_fundamental_bundle", return_value=_no_tushare_bundle()), \
                 patch.object(manager, "get_realtime_quote", return_value=quote), \
                 patch(
                     "data_provider.fundamental_adapter.AkshareFundamentalAdapter.get_fundamental_bundle",
@@ -430,6 +520,7 @@ class TestFundamentalContext(unittest.TestCase):
             "errors": [],
         }
         with patch("src.config.get_config", return_value=cfg), \
+                patch.object(manager, "_get_tushare_fundamental_bundle", return_value=_no_tushare_bundle()), \
                 patch.object(manager, "get_realtime_quote", return_value=quote), \
                 patch(
                     "data_provider.fundamental_adapter.AkshareFundamentalAdapter.get_fundamental_bundle",

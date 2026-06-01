@@ -273,6 +273,7 @@ Default schedule: Every weekday at **18:00 (Beijing Time)** automatic execution.
 
 > **Behavior Notes:**
 > - **A-shares**: Returns aggregated capabilities by `valuation/growth/earnings/institution/capital_flow/dragon_tiger/boards`.
+> - With `TUSHARE_TOKEN`, A-share `fundamental_context` tries Tushare Pro first via `daily_basic`, `fina_indicator`, `income`, `cashflow`, and `dividend` for valuation, market cap, growth/quality, financial report, and cash-dividend blocks; missing token, permission failures, or timeouts fall back to the AkShare aggregation block and stay fail-open.
 > - **ETFs**: Returns available items, marks missing capabilities as `not_supported`, and does not affect the original flow overall.
 > - **US/HK stocks**: Returns `not_supported` fallback block.
 > - Any exception uses fail-open logic, only logs errors without affecting the main technical/news/chip pipeline.
@@ -280,7 +281,11 @@ Default schedule: Every weekday at **18:00 (Beijing Time)** automatic execution.
 > - The local Iwencai usage counter is stored at `IWENCAI_USAGE_PATH` (default `./data/iwencai_usage.json`) and is shared by realtime/search fallback calls.
 > - **Field contracts**:
 >   - `fundamental_context.belong_boards` = related board list for the stock (currently populated for A-shares only; `[]` when unavailable);
+>   - `fundamental_context.valuation.data` = valuation summary (PE, PE TTM, PB, dividend yield, total market cap, circulating market cap; Tushare market-cap fields are normalized from 10k CNY to CNY);
+>   - `fundamental_context.growth.data` = growth/quality summary (revenue YoY, parent net-profit YoY, ROE, ROA, gross margin, net margin, debt-to-assets, and related fields);
 >   - `fundamental_context.boards.data` = `sector_rankings` (sector rise/fall leaderboard, structure `{top, bottom}`);
+>   - `fundamental_context.earnings.data.financial_report` = financial-report summary (report period, revenue, parent net profit, operating cash flow, ROE);
+>   - `fundamental_context.earnings.data.dividend` = dividend metrics (pre-tax cash-dividend view with `events`, `ttm_cash_dividend_per_share`, and `ttm_dividend_yield_pct`);
 >   - `get_stock_info.belong_boards` = list of sectors the individual stock belongs to;
 >   - `get_stock_info.boards` is a compatibility alias, value is identical to `belong_boards` (removal considered only in major version updates);
 >   - `get_stock_info.sector_rankings` stays consistent with `fundamental_context.boards.data`.
@@ -290,6 +295,7 @@ Default schedule: Every weekday at **18:00 (Beijing Time)** automatic execution.
 > - **Timeout control** is a `best-effort` soft timeout: the stage will quickly degrade and continue execution based on the budget, but does not guarantee a hard interrupt of underlying third-party network calls.
 > - `FUNDAMENTAL_STAGE_TIMEOUT_SECONDS=1.5` indicates the target budget for the newly added fundamental stage, not a strict hard SLA.
 > - For a hard SLA, please upgrade to isolated child process execution in future versions to forcefully terminate timeout tasks.
+> - Agent backtest contexts keep compact degradation summaries for fundamentals and capital-flow blocks. When valuation, growth, earnings, institution, capital-flow, dragon-tiger, or board blocks fail, are empty, or are unsupported, `codex_research_fallback` marks Codex as a `Codex 外部兜底` candidate source for supplemental public evidence such as announcements, financial reports, valuation pages, and public fund-flow clues. This fallback is external evidence only; it is not written back into DSA provider fields and does not replace normalized quotes, K-lines, or provider-only capital-flow data.
 
 ### Other Configuration
 
@@ -861,7 +867,7 @@ Backtesting triggers automatically after the daily analysis flow completes (non-
 
 ### Agent Backtest Workbench
 
-`/api/v1/agent-backtest` is a multi-operator paper-trading experiment API with isolated `market=cn` and `market=us` runs. A-share runs create short/medium/long profiles and enforce 6-digit symbols, 100-share board lots, T+1 sell availability, and buy-side cash checks. US runs create US cash-account short/medium/long profiles and enforce USD ledgers, whole shares, settled cash only, sell proceeds available on the next US business day, and at most one same-day round trip per rolling five US business days. Each review cycle researches the run watchlist plus every symbol currently held by any active operator account, then gives every profile the same `symbol_facts` structure; when information search is unavailable or a US run uses Codex-first research, the context adds `codex_research_fallback` queries for supplemental public research. The standalone Web entry is `/agent-backtest` ("操盘"), with an A-share / US switch for comparing active operators by NAV return curves, account-equity curves, current equity, strategy version, joined time, latest decision, and event stream. The detailed Chinese guide is [Agent 回测实验台](agent-backtest-workbench.md).
+`/api/v1/agent-backtest` is a multi-operator paper-trading experiment API with isolated `market=cn` and `market=us` runs. A-share runs create short/medium/long profiles and enforce 6-digit symbols, 100-share board lots, T+1 sell availability, and buy-side cash checks. US runs create US cash-account short/medium/long profiles and enforce USD ledgers, whole shares, settled cash only, sell proceeds available on the next US business day, and at most one same-day round trip per rolling five US business days. Each review cycle researches the run watchlist plus every symbol currently held by any active operator account, then gives every profile the same `symbol_facts` structure, including market, technical, fundamental, information, sentiment, and a derived `long_horizon_context` that keeps the same stock pool while summarizing long-structure, valuation, data coverage, information-risk flags, and pilot-entry gates. When information search is unavailable, fundamental/capital-flow blocks degrade, or a US run uses Codex-first research, the context adds `codex_research_fallback` queries for supplemental public research. The long profile also receives `profile_decision_guidance`: observe/hold stays valid, while a buy should be treated only as a small pilot entry after basic valuation, long-structure, information-risk, cash, and lot-size checks pass. The standalone Web entry is `/agent-backtest` ("操盘"), with an A-share / US switch for comparing active operators by NAV return curves, account-equity curves, current equity, strategy version, joined time, latest decision, and event stream. The detailed Chinese guide is [Agent 回测实验台](agent-backtest-workbench.md).
 
 Tail Tactics also has a Codex Desktop review automation: `python scripts/install_tail_tactics_codex_automation.py` registers `dsa-tail-tactics-midday-review` for each A-share weekday at 11:30. It reviews the previous trading day's ranked, unreviewed tail experiment by running `scripts/run_tail_tactics_codex_review.py prepare-review`, saving morning metrics and a Codex context, then using `apply-review` to write the review back to the experiment. Layer 2 Agent scoring/forecast calibration notes are accumulated locally and injected into later scoring; Layer 1 Tonghuashun screening changes remain user-approved requests. See the Chinese [Tail Tactics Workbench guide](tail-tactics-workbench.md).
 

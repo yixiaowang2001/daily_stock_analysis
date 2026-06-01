@@ -162,9 +162,13 @@ python scripts/install_agent_backtest_codex_automations.py --run-id <prepare 输
 
 美股现金账户 run 建议使用更少、更贴近交易时段的独立节奏：09:40 ET `morning` 开盘看盘、14:30 ET `midday` 下午看盘、16:20 ET `close` 收盘复盘、20:30 ET `tail` 盘外/隔夜看盘。若用北京时间调度，夏令时大致对应 21:40 当日以及次日 02:30、04:20、08:30，冬令时需顺延 1 小时；收盘复盘只做净值、自评和策略迭代，不创建买卖订单。
 
-每轮看盘会先为研究全集生成同一份 `symbol_facts`，再注入每个 profile 的隔离上下文。`symbol_facts` 固定保留行情/日线兼容字段，并按同一结构提供 `market_data`、`technical_context`、`fundamental_context`、`information_context` 和 `sentiment_context`。从 `agent_backtest_symbol_facts_v3` 起，`symbol_facts` 还会提供 `codex_research_fallback`：当内置搜索 provider 失败、无结果或被跳过时标记为 `recommended`，并给出可直接用于 Codex 补搜的查询词。短线、中线、长线的差异只体现在策略解释和取舍上：例如短线可以重点看技术和情绪，长线可以重点看基本面和长周期结构，但数据采集层不会因为 profile 风格不同而少给某一类证据。外部增强链路不可用时以 `skipped` / `failed` 标记，保持 fail-open。
+每轮看盘会先为研究全集生成同一份 `symbol_facts`，再注入每个 profile 的隔离上下文。`symbol_facts` 固定保留行情/日线兼容字段，并按同一结构提供 `market_data`、`technical_context`、`fundamental_context`、`information_context`、`sentiment_context` 和派生的 `long_horizon_context`。其中 `long_horizon_context` 不改变股票池，而是在同一批标的上汇总长周期均线/收益/回撤、基础估值可用性、基本面块覆盖、资讯风险词和 `pilot_entry_gate`，帮助长线操盘手判断是否只允许观察，还是可考虑 100 股小试仓。从 `agent_backtest_symbol_facts_v3` 起，`symbol_facts` 还会提供 `codex_research_fallback`：当内置搜索 provider 失败、无结果、被跳过，或 `fundamental_context` 中估值、业绩、机构、资金流、龙虎榜、板块等关键块降级时标记为 `recommended`，并给出可直接用于 Codex 补搜的查询词。短线、中线、长线的差异只体现在策略解释和取舍上：例如短线可以重点看技术和情绪，长线可以重点看基本面、`long_horizon_context` 和长周期结构，但数据采集层不会因为 profile 风格不同而少给某一类证据。外部增强链路不可用时以 `skipped` / `failed` 标记，保持 fail-open。
 
-Codex Desktop 自动化和本地 CLI 备用调度都会读取 `codex_research_fallback`。若关注池或持仓标的的资讯层标记为 `recommended`，Codex 应使用可用的联网/搜索/browser 工具补搜公开信息，优先交易所/公司公告与有时间戳的可靠财经媒体，只使用 `data_cutoff_at` 之前的信息，并在决策理由、风险说明和本轮总结中记录来源标题、日期和 URL；如果 Codex 当前环境没有搜索工具，则把它作为数据缺口处理。
+A 股 `fundamental_context` 在配置 `TUSHARE_TOKEN` 时会优先用 Tushare Pro 的 `daily_basic`、`fina_indicator`、`income`、`cashflow` 和 `dividend` 填充估值、市值、成长、财报和现金分红；权限、额度、超时或 Token 缺失时再回退到 AkShare 聚合块。因此长线操盘手默认可以在同一份上下文里看到基本面、技术面、资讯和情绪面证据，只是每个块仍会按 provider 结果独立降级。
+
+长线 profile 还会在 `evidence.profile_decision_guidance` 中获得同池试仓规则：`observe` / `hold` 永远有效；只有标的仍在 `buy_allowed_symbols`、`long_horizon_context.pilot_entry_gate.status == "candidate"`、现金和 100 股整数手约束通过、且无未解决的截点前重大资讯风险时，才可把尾盘买入解释为小试仓。基本面 provider 的业绩、成长、机构或资金流块缺失会降低置信度并写入 `risk_notes`，但只要基础估值/市值证据和长周期结构可用，不会自动禁止试仓。
+
+Codex Desktop 自动化和本地 CLI 备用调度都会读取 `codex_research_fallback`。若关注池或持仓标的标记为 `recommended`，Codex 应使用可用的联网/搜索/browser 工具作为外部公开证据源，补齐公告、新闻、财报、估值和公开资金流线索。所有补充事实必须标注为 `Codex 外部兜底`，优先交易所/公司公告、财报和有时间戳的可靠财经媒体，只使用 `data_cutoff_at` 之前的信息，并在决策理由、风险说明和本轮总结中记录来源标题、日期和 URL；如果 Codex 当前环境没有搜索工具，则把它作为数据缺口处理。Codex 兜底不写回 `fundamental_context` / `information_context` 等 DSA provider 字段，也不能替代规范化行情、K 线或 provider 专有资金流。
 
 ### 美股现金账户规则
 

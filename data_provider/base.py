@@ -1914,6 +1914,28 @@ class DataFetcherManager:
         from src.config import get_config
         return get_config()
 
+    def _get_tushare_fundamental_bundle(self, stock_code: str) -> Dict[str, Any]:
+        """Fetch Tushare Pro financial blocks when the configured fetcher is available."""
+        for fetcher in self._get_fetchers_snapshot():
+            if getattr(fetcher, "name", "") != "TushareFetcher":
+                continue
+            is_available = getattr(fetcher, "is_available", None)
+            if callable(is_available) and not is_available():
+                continue
+            method = getattr(fetcher, "get_fundamental_bundle", None)
+            if not callable(method):
+                continue
+            return self._call_fetcher_method(fetcher, "get_fundamental_bundle", stock_code)
+        return {
+            "status": "not_supported",
+            "valuation": {},
+            "growth": {},
+            "earnings": {},
+            "institution": {},
+            "source_chain": [],
+            "errors": [],
+        }
+
     @staticmethod
     def _normalize_source_chain(
         entries: Any,
@@ -2105,6 +2127,18 @@ class DataFetcherManager:
             current = target.get(key)
             if not DataFetcherManager._has_meaningful_payload(current):
                 target[key] = value
+
+    @staticmethod
+    def _merge_fundamental_payloads(
+        fallback: Any,
+        primary: Any,
+    ) -> Dict[str, Any]:
+        merged: Dict[str, Any] = dict(fallback) if isinstance(fallback, dict) else {}
+        if isinstance(primary, dict):
+            for key, value in primary.items():
+                if DataFetcherManager._has_meaningful_payload(value):
+                    merged[key] = value
+        return merged
 
     def _get_us_fundamental_context(
         self,
@@ -2405,48 +2439,114 @@ class DataFetcherManager:
             nonlocal remaining_seconds
             remaining_seconds = max(0.0, remaining_seconds - consumed_ms / 1000.0)
 
-        valuation_timeout = min(fetch_timeout, remaining_seconds)
-        if valuation_timeout > 0:
-            quote_payload, valuation_err, valuation_ms = self._run_with_retry(
-                lambda: self.get_realtime_quote(stock_code),
-                valuation_timeout,
-                "fundamental_valuation",
+        tushare_bundle_payload: Dict[str, Any] = {}
+        tushare_bundle_status = "not_supported"
+        tushare_bundle_errors: List[str] = []
+        tushare_bundle_ms = 0
+        if market == "cn" and not is_etf and remaining_seconds > 0:
+            tushare_timeout = min(fetch_timeout, remaining_seconds)
+            tushare_payload, tushare_err, tushare_bundle_ms = self._run_with_retry(
+                lambda: self._get_tushare_fundamental_bundle(stock_code),
+                tushare_timeout,
+                "tushare_fundamental_bundle",
             )
-            _consume_budget(valuation_ms)
-        else:
-            quote_payload, valuation_err, valuation_ms = None, "fundamental stage timeout", 0
-
-        valuation_payload = {
-            "pe_ratio": getattr(quote_payload, "pe_ratio", None) if quote_payload else None,
-            "pb_ratio": getattr(quote_payload, "pb_ratio", None) if quote_payload else None,
-            "total_mv": getattr(quote_payload, "total_mv", None) if quote_payload else None,
-            "circ_mv": getattr(quote_payload, "circ_mv", None) if quote_payload else None,
-        }
-        valuation_status = self._infer_block_status(
-            valuation_payload,
-            "partial" if quote_payload is not None else "not_supported",
+            _consume_budget(tushare_bundle_ms)
+            if isinstance(tushare_payload, dict):
+                tushare_bundle_payload = tushare_payload
+                tushare_bundle_status = str(tushare_payload.get("status", "not_supported"))
+                tushare_bundle_errors = list(tushare_payload.get("errors", []))
+                if tushare_err:
+                    tushare_bundle_errors.append(tushare_err)
+            else:
+                tushare_bundle_errors = ["tushare_fundamental_bundle failed"]
+                if tushare_err:
+                    tushare_bundle_errors.append(tushare_err)
+        tushare_has_block_payload = any(
+            self._has_meaningful_payload(tushare_bundle_payload.get(block))
+            for block in ("valuation", "growth", "earnings", "institution")
         )
-        if valuation_status == "partial" and valuation_err and not self._has_meaningful_payload(valuation_payload):
-            valuation_status = "failed"
-        result_ctx["valuation"] = self._build_fundamental_block(
-            valuation_status,
-            valuation_payload,
-            self._normalize_source_chain(
+
+        tushare_valuation_payload = (
+            tushare_bundle_payload.get("valuation", {})
+            if isinstance(tushare_bundle_payload, dict)
+            else {}
+        )
+        quote_payload = None
+        valuation_err = None
+        valuation_ms = 0
+        if self._has_meaningful_payload(tushare_valuation_payload):
+            valuation_payload = dict(tushare_valuation_payload)
+            valuation_status = self._infer_block_status(valuation_payload, tushare_bundle_status)
+            valuation_source_chain = self._normalize_source_chain(
+                tushare_bundle_payload.get("source_chain", []),
+                "tushare_fundamental_bundle",
+                valuation_status,
+                tushare_bundle_ms,
+            )
+            valuation_errors = list(tushare_bundle_errors)
+        else:
+            valuation_timeout = min(fetch_timeout, remaining_seconds)
+            if valuation_timeout > 0:
+                quote_payload, valuation_err, valuation_ms = self._run_with_retry(
+                    lambda: self.get_realtime_quote(stock_code),
+                    valuation_timeout,
+                    "fundamental_valuation",
+                )
+                _consume_budget(valuation_ms)
+            else:
+                quote_payload, valuation_err, valuation_ms = None, "fundamental stage timeout", 0
+
+            valuation_payload = {
+                "pe_ratio": getattr(quote_payload, "pe_ratio", None) if quote_payload else None,
+                "pb_ratio": getattr(quote_payload, "pb_ratio", None) if quote_payload else None,
+                "total_mv": getattr(quote_payload, "total_mv", None) if quote_payload else None,
+                "circ_mv": getattr(quote_payload, "circ_mv", None) if quote_payload else None,
+            }
+            valuation_status = self._infer_block_status(
+                valuation_payload,
+                "partial" if quote_payload is not None else "not_supported",
+            )
+            if valuation_status == "partial" and valuation_err and not self._has_meaningful_payload(valuation_payload):
+                valuation_status = "failed"
+            valuation_source_chain = self._normalize_source_chain(
                 [{"provider": "realtime_quote", "result": valuation_status, "duration_ms": valuation_ms}],
                 "realtime_quote",
                 valuation_status,
                 valuation_ms,
-            ),
-            [valuation_err] if valuation_err else [],
+            )
+            valuation_errors = [valuation_err] if valuation_err else []
+
+        result_ctx["valuation"] = self._build_fundamental_block(
+            valuation_status,
+            valuation_payload,
+            valuation_source_chain,
+            valuation_errors,
         )
 
-        # growth / earnings / institution (one AkShare call)
-        if remaining_seconds <= 0:
-            bundle_status = "failed"
-            bundle_payload: Dict[str, Any] = {}
-            bundle_errors = ["fundamental stage timeout"]
-            bundle_ms = 0
-        else:
+        # growth / earnings / institution (Tushare-first, AkShare fallback)
+        tushare_growth_payload = (
+            tushare_bundle_payload.get("growth", {})
+            if isinstance(tushare_bundle_payload, dict)
+            else {}
+        )
+        tushare_earnings_payload = (
+            tushare_bundle_payload.get("earnings", {})
+            if isinstance(tushare_bundle_payload, dict)
+            else {}
+        )
+        tushare_institution_payload = (
+            tushare_bundle_payload.get("institution", {})
+            if isinstance(tushare_bundle_payload, dict)
+            else {}
+        )
+        should_try_akshare_bundle = (
+            remaining_seconds > 0
+            and (
+                not self._has_meaningful_payload(tushare_growth_payload)
+                or not self._has_meaningful_payload(tushare_earnings_payload)
+            )
+        )
+        if should_try_akshare_bundle:
             bundle_timeout = min(fetch_timeout, remaining_seconds)
             bundle_payload, bundle_err_msg, bundle_ms = self._run_with_retry(
                 lambda: self._fundamental_adapter.get_fundamental_bundle(stock_code),
@@ -2463,35 +2563,47 @@ class DataFetcherManager:
             else:
                 bundle_status = str(bundle_payload.get("status", "not_supported"))
                 bundle_errors = [bundle_err_msg] if bundle_err_msg else []
+        else:
+            bundle_status = "not_supported"
+            bundle_payload = {}
+            bundle_errors = []
+            bundle_ms = 0
 
         bundle_chain = self._normalize_source_chain(
-            bundle_payload.get("source_chain", []),
+            list(tushare_bundle_payload.get("source_chain", []))
+            + list(bundle_payload.get("source_chain", [])),
             "fundamental_bundle",
-            bundle_status,
-            bundle_ms,
-        ) if isinstance(bundle_payload, dict) else self._normalize_source_chain(
-            None,
-            "fundamental_bundle",
-            bundle_status,
-            bundle_ms,
+            "partial" if (tushare_bundle_payload or bundle_payload) else bundle_status,
+            max(tushare_bundle_ms, bundle_ms),
         )
-        growth_payload = bundle_payload.get("growth", {}) if isinstance(bundle_payload, dict) else {}
-        earnings_payload = bundle_payload.get("earnings", {}) if isinstance(bundle_payload, dict) else {}
-        institution_payload = bundle_payload.get("institution", {}) if isinstance(bundle_payload, dict) else {}
+        akshare_growth_payload = bundle_payload.get("growth", {}) if isinstance(bundle_payload, dict) else {}
+        akshare_earnings_payload = bundle_payload.get("earnings", {}) if isinstance(bundle_payload, dict) else {}
+        akshare_institution_payload = bundle_payload.get("institution", {}) if isinstance(bundle_payload, dict) else {}
+        akshare_has_block_payload = any(
+            self._has_meaningful_payload(bundle_payload.get(block))
+            for block in ("growth", "earnings", "institution")
+        ) if isinstance(bundle_payload, dict) else False
+
+        growth_payload = self._merge_fundamental_payloads(
+            akshare_growth_payload,
+            tushare_growth_payload,
+        )
+        earnings_payload = self._merge_fundamental_payloads(
+            akshare_earnings_payload,
+            tushare_earnings_payload,
+        )
+        institution_payload = self._merge_fundamental_payloads(
+            akshare_institution_payload,
+            tushare_institution_payload,
+        )
         if not isinstance(growth_payload, dict):
             growth_payload = {}
-        else:
-            growth_payload = dict(growth_payload)
         if not isinstance(earnings_payload, dict):
             earnings_payload = {}
-        else:
-            earnings_payload = dict(earnings_payload)
         if not isinstance(institution_payload, dict):
             institution_payload = {}
-        else:
-            institution_payload = dict(institution_payload)
 
-        # Derive TTM dividend yield from already-fetched quote price; avoid extra quote calls.
+        # Derive TTM dividend yield from already-fetched price evidence; avoid extra quote calls.
         earnings_extra_errors: List[str] = []
         dividend_payload = earnings_payload.get("dividend")
         if isinstance(dividend_payload, dict):
@@ -2507,6 +2619,7 @@ class DataFetcherManager:
                 latest_price_raw = quote_payload.get("price")
             else:
                 latest_price_raw = getattr(quote_payload, "price", None) if quote_payload else None
+            latest_price_raw = latest_price_raw or valuation_payload.get("close")
             latest_price = None
             if latest_price_raw is not None:
                 try:
@@ -2517,6 +2630,8 @@ class DataFetcherManager:
             if ttm_cash is not None:
                 if latest_price is not None and latest_price > 0:
                     ttm_yield = round(ttm_cash / latest_price * 100.0, 4)
+                elif dividend_payload.get("ttm_dividend_yield_pct") is not None:
+                    ttm_yield = dividend_payload.get("ttm_dividend_yield_pct")
                 else:
                     earnings_extra_errors.append("invalid_price_for_ttm_dividend_yield")
 
@@ -2525,16 +2640,28 @@ class DataFetcherManager:
                 dividend_payload["yield_formula"] = "ttm_cash_dividend_per_share / latest_price * 100"
             earnings_payload["dividend"] = dividend_payload
 
-        adapter_errors = list(bundle_payload.get("errors", [])) if isinstance(bundle_payload, dict) else []
+        adapter_errors = []
+        if isinstance(bundle_payload, dict):
+            adapter_errors.extend(list(bundle_payload.get("errors", [])))
         adapter_errors.extend(bundle_errors)
+        adapter_errors.extend(tushare_bundle_errors)
         growth_errors = list(adapter_errors)
         earnings_errors = list(adapter_errors)
         earnings_errors.extend(earnings_extra_errors)
         institution_errors = list(adapter_errors)
 
-        growth_status = self._infer_block_status(growth_payload, bundle_status)
-        earnings_status = self._infer_block_status(earnings_payload, bundle_status)
-        institution_status = self._infer_block_status(institution_payload, bundle_status)
+        combined_bundle_status = (
+            "partial"
+            if tushare_has_block_payload or akshare_has_block_payload
+            else bundle_status
+        )
+        growth_status = self._infer_block_status(growth_payload, combined_bundle_status)
+        earnings_status = self._infer_block_status(earnings_payload, combined_bundle_status)
+        institution_status = (
+            self._infer_block_status(institution_payload, combined_bundle_status)
+            if self._has_meaningful_payload(institution_payload)
+            else "not_supported"
+        )
 
         result_ctx["growth"] = self._build_fundamental_block(
             growth_status,

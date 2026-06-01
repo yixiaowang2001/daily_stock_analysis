@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 操盘页面当日盈亏展示调整为收益率主视觉、盈亏金额辅助信息，便于快速扫描操盘手日内表现。
 - [改进] 操盘页面操盘手卡片新增风格缩略图与当日盈亏展示，并在详情弹窗同步显示最新净值相对上一净值日的盈亏变化。
 - [修复] 操盘页面读取 Agent 回测事件流时默认跳过 observation `evidence` 和 decision `raw_output` 大字段，避免历史上下文膨胀后净值曲线长时间停留在空态。
+- [修复] Agent 回测 runner 在生成 Codex 上下文时压缩历史 observation 证据，避免历史事件递归嵌套导致看盘上下文膨胀到 GB 级。
+- [改进] Agent 回测上下文新增长线 `long_horizon_context` 与同池试仓指引，长线操盘手可在基础估值、长周期结构和信息风险闸门满足时考虑最小单位试仓，而不需要单独股票池。
+- [改进] A 股基本面聚合在配置 Tushare Token 时优先使用 `daily_basic`、`fina_indicator`、`income`、`cashflow`、`dividend` 填充估值、成长、财报和分红块，并保留 AkShare 作为免费兜底。
 - [新功能] Agent 回测支持 `market=us` 美股现金账户三操盘手实验，默认生成美股短线/中线/长线隔离 profile，并执行 USD、整股、settled cash、卖出资金 T+1 美股工作日释放和滚动 5 个美股工作日最多 1 次日内回转的硬规则。
 - [改进] 美股 Agent 回测默认 profile 名称移除“美股”前缀，并将默认节奏调整为开盘、下午、收盘复盘和盘外/隔夜四段。
 - [新功能] 美股行情接入独立 fallback 顺序，新增 Longbridge / Massive(Polygon) / Twelve Data / Finnhub / Alpha Vantage / yfinance 优先级配置与 key 示例，不影响 A 股数据源。
@@ -47,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Agent 回测 Codex runner 将看盘数据升级为 profile-neutral 统一事实包：研究全集覆盖关注池与所有 active 操盘手持仓标的，每个 profile 获得同一份行情、技术、基本面、资讯和情绪层 `symbol_facts`，再由短/中/长策略自行选择权重。
 - [改进] Agent 回测 Codex 自动化调整为 09:40、10:30、11:20、13:35、14:40 五次看盘决策和 16:05 收盘复盘；每次看盘允许 `observe` / `hold`，不要求操盘手必须交易，收盘复盘可将操盘手自评沉淀为前向策略版本。
 - [改进] Agent 回测上下文新增 `codex_research_fallback`，当内置资讯搜索失败或结果为空时提示 Codex 自动化用自身联网搜索补齐公开信息并在决策/总结中记录来源。
+- [改进] Agent 回测 `codex_research_fallback` 扩展到基本面与资金流降级场景，并保留 compact provider 错误摘要，Codex 兜底事实必须标注为 `Codex 外部兜底`。
 - [改进] 操盘手详情弹窗加宽并将持仓明细改为横向表格，默认展示最新策略正文，支持只读切换历史策略版本，并新增历史决策模块与彩色决策动作标签。
 - [改进] 操盘手详情弹窗新增左右侧切换按钮与键盘方向键切换，打开详情后可连续浏览所有 active 操盘手。
 - [修复] 操盘手详情弹窗策略版本按钮与下拉菜单改为小字号，并修正夜间模式下选中项白底过亮。

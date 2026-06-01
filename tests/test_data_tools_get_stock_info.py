@@ -27,6 +27,7 @@ class _DummyManager:
                 "dragon_tiger": "not_supported",
                 "boards": "ok",
             },
+            "errors": ["capital_flow timeout", "boards fallback failed"],
             "valuation": {
                 "status": "ok",
                 "data": {
@@ -39,7 +40,11 @@ class _DummyManager:
             "growth": {"status": "not_supported", "data": {}},
             "earnings": {"status": "not_supported", "data": {}},
             "institution": {"status": "not_supported", "data": {}},
-            "capital_flow": {"status": "not_supported", "data": {}},
+            "capital_flow": {
+                "status": "not_supported",
+                "data": {},
+                "errors": ["stock_individual_fund_flow:ConnectionError"],
+            },
             "dragon_tiger": {"status": "not_supported", "data": {}},
             "boards": {
                 "status": "ok",
@@ -84,6 +89,11 @@ class TestGetStockInfoContract(unittest.TestCase):
         self.assertEqual(
             result["fundamental_context"]["boards"]["data"],
             result["sector_rankings"],
+        )
+        self.assertIn("capital_flow timeout", result["fundamental_context"]["errors"])
+        self.assertIn(
+            "stock_individual_fund_flow:ConnectionError",
+            result["fundamental_context"]["capital_flow"]["errors"],
         )
 
 

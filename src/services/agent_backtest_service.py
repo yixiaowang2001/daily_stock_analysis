@@ -62,7 +62,9 @@ DEFAULT_AGENT_PROFILES: List[Dict[str, str]] = [
         "policy_version_label": "v1.0",
         "policy_markdown": (
             "风格边界：偏长线，关注基本面、估值、行业景气和周线/月线结构，默认降低换手频率。"
-            "可以观察盘中信息，但不应被短时噪音驱动。"
+            "使用同一实验股票池，不单独扩展长线池；优先读取 long_horizon_context、fundamental_context "
+            "和长周期技术结构。可以观察盘中信息，但不应被短时噪音驱动；当基本估值、长周期结构和信息风险闸门满足时，"
+            "允许先用最小交易单位做试仓，并把缺失的业绩/成长/机构/资金流证据写入风险说明。"
         ),
     },
 ]

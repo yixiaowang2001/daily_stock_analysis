@@ -769,6 +769,277 @@ class TushareFetcher(BaseFetcher):
             logger.warning(f"Tushare (旧版) 获取实时行情失败 {stock_code}: {e}")
             return None
 
+    @staticmethod
+    def _latest_tushare_row(df: pd.DataFrame, date_columns: Tuple[str, ...]) -> Optional[pd.Series]:
+        """Return the latest row by Tushare date columns."""
+        if df is None or df.empty:
+            return None
+        work_df = df.copy()
+        sort_columns = [col for col in date_columns if col in work_df.columns]
+        if sort_columns:
+            for col in sort_columns:
+                work_df[col] = work_df[col].astype(str)
+            work_df = work_df.sort_values(sort_columns, ascending=False)
+        return work_df.iloc[0]
+
+    @staticmethod
+    def _format_tushare_date(value: Any) -> Optional[str]:
+        raw = str(value or "").strip()
+        if not raw or raw.lower() in {"none", "nan", "nat"}:
+            return None
+        try:
+            parsed = pd.to_datetime(raw)
+        except Exception:
+            return None
+        if pd.isna(parsed):
+            return None
+        return parsed.date().isoformat()
+
+    @staticmethod
+    def _parse_tushare_date(value: Any) -> Optional[datetime]:
+        text = TushareFetcher._format_tushare_date(value)
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            return None
+
+    def _query_fundamental_df(self, api_name: str, fields: str, **kwargs) -> Tuple[pd.DataFrame, Optional[str]]:
+        """Call a Tushare fundamental endpoint and convert failures to an error string."""
+        try:
+            df = self._call_api_with_rate_limit(api_name, fields=fields, **kwargs)
+        except Exception as exc:
+            return pd.DataFrame(), f"{api_name}:{type(exc).__name__}:{str(exc)[:180]}"
+        if df is None:
+            return pd.DataFrame(), f"{api_name}:empty"
+        return df, None
+
+    def get_fundamental_bundle(self, stock_code: str) -> Dict[str, Any]:
+        """
+        Return Tushare-first A-share fundamental blocks.
+
+        Tushare daily_basic market cap fields are in 10k CNY units. Normalize
+        them to CNY to match UnifiedRealtimeQuote.total_mv/circ_mv semantics.
+        """
+        from .realtime_types import safe_float
+
+        result: Dict[str, Any] = {
+            "status": "not_supported",
+            "valuation": {},
+            "growth": {},
+            "earnings": {},
+            "institution": {},
+            "source_chain": [],
+            "errors": [],
+        }
+        if self._api is None:
+            result["errors"].append("tushare api not initialized")
+            return result
+        if _is_us_code(stock_code) or _is_hk_market(stock_code) or _is_etf_code(stock_code):
+            result["errors"].append("market not supported by Tushare fundamental bundle")
+            return result
+
+        ts_code = self._convert_stock_code(stock_code)
+        now = self._get_china_now()
+        end_date = now.strftime("%Y%m%d")
+        recent_start = (now - timedelta(days=45)).strftime("%Y%m%d")
+        report_start = (now - timedelta(days=900)).strftime("%Y%m%d")
+
+        daily_basic_df, daily_basic_error = self._query_fundamental_df(
+            "daily_basic",
+            "ts_code,trade_date,close,pe,pe_ttm,pb,dv_ratio,dv_ttm,total_mv,circ_mv,turnover_rate,volume_ratio",
+            ts_code=ts_code,
+            start_date=recent_start,
+            end_date=end_date,
+        )
+        if daily_basic_error:
+            result["errors"].append(daily_basic_error)
+        daily_row = self._latest_tushare_row(daily_basic_df, ("trade_date",))
+        if daily_row is not None:
+            total_mv_wan = safe_float(daily_row.get("total_mv"))
+            circ_mv_wan = safe_float(daily_row.get("circ_mv"))
+            result["valuation"] = {
+                "trade_date": self._format_tushare_date(daily_row.get("trade_date")),
+                "close": safe_float(daily_row.get("close")),
+                "pe_ratio": safe_float(daily_row.get("pe")),
+                "pe_ttm": safe_float(daily_row.get("pe_ttm")),
+                "pb_ratio": safe_float(daily_row.get("pb")),
+                "dividend_yield_pct": safe_float(daily_row.get("dv_ratio")),
+                "dividend_yield_ttm_pct": safe_float(daily_row.get("dv_ttm")),
+                "total_mv": total_mv_wan * 10000.0 if total_mv_wan is not None else None,
+                "circ_mv": circ_mv_wan * 10000.0 if circ_mv_wan is not None else None,
+                "total_mv_raw_10k_cny": total_mv_wan,
+                "circ_mv_raw_10k_cny": circ_mv_wan,
+                "turnover_rate": safe_float(daily_row.get("turnover_rate")),
+                "volume_ratio": safe_float(daily_row.get("volume_ratio")),
+            }
+            result["source_chain"].append("valuation:tushare_daily_basic")
+
+        indicator_df, indicator_error = self._query_fundamental_df(
+            "fina_indicator",
+            "ts_code,ann_date,end_date,roe,roe_dt,roa,grossprofit_margin,netprofit_margin,ocfps,eps,bps,netprofit_yoy,or_yoy,debt_to_assets",
+            ts_code=ts_code,
+            start_date=report_start,
+            end_date=end_date,
+        )
+        if indicator_error:
+            result["errors"].append(indicator_error)
+        indicator_row = self._latest_tushare_row(indicator_df, ("ann_date", "end_date"))
+        if indicator_row is not None:
+            result["growth"] = {
+                "report_date": self._format_tushare_date(indicator_row.get("end_date")),
+                "announce_date": self._format_tushare_date(indicator_row.get("ann_date")),
+                "revenue_yoy": safe_float(indicator_row.get("or_yoy")),
+                "net_profit_yoy": safe_float(indicator_row.get("netprofit_yoy")),
+                "roe": safe_float(indicator_row.get("roe")),
+                "roe_diluted": safe_float(indicator_row.get("roe_dt")),
+                "roa": safe_float(indicator_row.get("roa")),
+                "gross_margin": safe_float(indicator_row.get("grossprofit_margin")),
+                "net_profit_margin": safe_float(indicator_row.get("netprofit_margin")),
+                "debt_to_assets": safe_float(indicator_row.get("debt_to_assets")),
+            }
+            result["source_chain"].append("growth:tushare_fina_indicator")
+
+        income_df, income_error = self._query_fundamental_df(
+            "income",
+            "ts_code,ann_date,end_date,total_revenue,revenue,n_income_attr_p,total_profit",
+            ts_code=ts_code,
+            start_date=report_start,
+            end_date=end_date,
+        )
+        if income_error:
+            result["errors"].append(income_error)
+        income_row = self._latest_tushare_row(income_df, ("ann_date", "end_date"))
+
+        cashflow_df, cashflow_error = self._query_fundamental_df(
+            "cashflow",
+            "ts_code,ann_date,end_date,n_cashflow_act",
+            ts_code=ts_code,
+            start_date=report_start,
+            end_date=end_date,
+        )
+        if cashflow_error:
+            result["errors"].append(cashflow_error)
+        cashflow_row = self._latest_tushare_row(cashflow_df, ("ann_date", "end_date"))
+
+        financial_report: Dict[str, Any] = {}
+        if income_row is not None:
+            financial_report.update(
+                {
+                    "report_date": self._format_tushare_date(income_row.get("end_date")),
+                    "announce_date": self._format_tushare_date(income_row.get("ann_date")),
+                    "total_revenue": safe_float(income_row.get("total_revenue")),
+                    "revenue": safe_float(income_row.get("revenue")),
+                    "net_profit_parent": safe_float(income_row.get("n_income_attr_p")),
+                    "total_profit": safe_float(income_row.get("total_profit")),
+                }
+            )
+        if cashflow_row is not None:
+            financial_report.setdefault("report_date", self._format_tushare_date(cashflow_row.get("end_date")))
+            financial_report.setdefault("announce_date", self._format_tushare_date(cashflow_row.get("ann_date")))
+            financial_report["operating_cash_flow"] = safe_float(cashflow_row.get("n_cashflow_act"))
+        if indicator_row is not None:
+            financial_report.setdefault("report_date", self._format_tushare_date(indicator_row.get("end_date")))
+            financial_report.setdefault("announce_date", self._format_tushare_date(indicator_row.get("ann_date")))
+            financial_report["roe"] = safe_float(indicator_row.get("roe"))
+            financial_report["eps"] = safe_float(indicator_row.get("eps"))
+            financial_report["bps"] = safe_float(indicator_row.get("bps"))
+            financial_report["operating_cash_flow_per_share"] = safe_float(indicator_row.get("ocfps"))
+        if any(value is not None and value != "" for value in financial_report.values()):
+            result["earnings"]["financial_report"] = financial_report
+            result["source_chain"].append("earnings:tushare_income_cashflow_fina_indicator")
+
+        dividend_df, dividend_error = self._query_fundamental_df(
+            "dividend",
+            "ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,cash_div,cash_div_tax,record_date,ex_date",
+            ts_code=ts_code,
+        )
+        if dividend_error:
+            result["errors"].append(dividend_error)
+        dividend_payload = self._build_tushare_dividend_payload(dividend_df)
+        if dividend_payload:
+            result["earnings"]["dividend"] = dividend_payload
+            result["source_chain"].append("dividend:tushare_dividend")
+
+        has_content = any(
+            bool(result.get(block))
+            for block in ("valuation", "growth", "earnings", "institution")
+        )
+        if has_content:
+            result["status"] = "partial" if result["errors"] else "ok"
+        return result
+
+    def _build_tushare_dividend_payload(self, dividend_df: pd.DataFrame, max_events: int = 5) -> Dict[str, Any]:
+        from .realtime_types import safe_float
+
+        if dividend_df is None or dividend_df.empty:
+            return {}
+        work_df = dividend_df.copy()
+        for col in ("ann_date", "end_date", "record_date", "ex_date"):
+            if col in work_df.columns:
+                work_df[col] = work_df[col].astype(str)
+        sort_cols = [col for col in ("ann_date", "end_date") if col in work_df.columns]
+        if sort_cols:
+            work_df = work_df.sort_values(sort_cols, ascending=False)
+
+        now_date = self._get_china_now().date()
+        ttm_start_date = now_date - timedelta(days=365)
+        events: List[Dict[str, Any]] = []
+        ttm_cash = 0.0
+        ttm_count = 0
+        seen = set()
+        for _, row in work_df.iterrows():
+            cash_tax = safe_float(row.get("cash_div_tax"))
+            cash_after_tax = safe_float(row.get("cash_div"))
+            per_share = cash_tax if cash_tax is not None and cash_tax > 0 else cash_after_tax
+            if per_share is None or per_share <= 0:
+                continue
+            ex_dt = self._parse_tushare_date(row.get("ex_date"))
+            record_dt = self._parse_tushare_date(row.get("record_date"))
+            ann_dt = self._parse_tushare_date(row.get("ann_date"))
+            event_dt = ex_dt or record_dt or ann_dt
+            if event_dt is None:
+                continue
+            event_date = event_dt.date()
+            key = (
+                self._format_tushare_date(row.get("end_date")),
+                self._format_tushare_date(row.get("ann_date")),
+                round(float(per_share), 6),
+                str(row.get("div_proc") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            event = {
+                "event_date": event_date.isoformat(),
+                "report_date": self._format_tushare_date(row.get("end_date")),
+                "announcement_date": self._format_tushare_date(row.get("ann_date")),
+                "record_date": self._format_tushare_date(row.get("record_date")),
+                "ex_dividend_date": self._format_tushare_date(row.get("ex_date")),
+                "dividend_process": str(row.get("div_proc") or "").strip() or None,
+                "cash_dividend_per_share": round(float(per_share), 6),
+                "is_pre_tax": cash_tax is not None and cash_tax > 0,
+            }
+            events.append(event)
+
+            cash_paid_dt = ex_dt or record_dt
+            if cash_paid_dt is not None:
+                cash_paid_date = cash_paid_dt.date()
+                if ttm_start_date <= cash_paid_date <= now_date:
+                    ttm_cash += float(per_share)
+                    ttm_count += 1
+
+        if not events:
+            return {}
+        return {
+            "events": events[:max_events],
+            "ttm_event_count": ttm_count,
+            "ttm_cash_dividend_per_share": round(ttm_cash, 6) if ttm_count else None,
+            "coverage": "cash_dividend_pre_tax_when_available",
+            "as_of": now_date.isoformat(),
+        }
+
     def get_main_indices(self, region: str = "cn") -> Optional[List[dict]]:
         """
         获取主要指数实时行情 (Tushare Pro)，仅支持 A 股

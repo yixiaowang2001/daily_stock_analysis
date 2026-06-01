@@ -154,6 +154,103 @@ class TestTushareFetcherFollowUps(unittest.TestCase):
         self.assertAlmostEqual(chip.concentration_70, 0.1)
         self.assertEqual(rate_limit_mock.call_count, 3)
 
+    def test_get_fundamental_bundle_normalizes_tushare_financial_blocks(self) -> None:
+        fetcher = self._make_fetcher()
+        fetcher._api.daily_basic.return_value = pd.DataFrame(
+            [
+                {
+                    "ts_code": "600519.SH",
+                    "trade_date": "20260317",
+                    "close": 100.0,
+                    "pe": 20.0,
+                    "pe_ttm": 19.8,
+                    "pb": 5.0,
+                    "dv_ratio": 2.1,
+                    "dv_ttm": 2.3,
+                    "total_mv": 123456.0,
+                    "circ_mv": 100000.0,
+                    "turnover_rate": 0.8,
+                    "volume_ratio": 1.2,
+                }
+            ]
+        )
+        fetcher._api.fina_indicator.return_value = pd.DataFrame(
+            [
+                {
+                    "ts_code": "600519.SH",
+                    "ann_date": "20260320",
+                    "end_date": "20251231",
+                    "roe": 30.0,
+                    "roe_dt": 29.0,
+                    "roa": 20.0,
+                    "grossprofit_margin": 80.0,
+                    "netprofit_margin": 50.0,
+                    "ocfps": 10.0,
+                    "eps": 5.0,
+                    "bps": 60.0,
+                    "netprofit_yoy": 12.0,
+                    "or_yoy": 8.0,
+                    "debt_to_assets": 25.0,
+                }
+            ]
+        )
+        fetcher._api.income.return_value = pd.DataFrame(
+            [
+                {
+                    "ts_code": "600519.SH",
+                    "ann_date": "20260320",
+                    "end_date": "20251231",
+                    "total_revenue": 1000.0,
+                    "revenue": 900.0,
+                    "n_income_attr_p": 300.0,
+                    "total_profit": 400.0,
+                }
+            ]
+        )
+        fetcher._api.cashflow.return_value = pd.DataFrame(
+            [
+                {
+                    "ts_code": "600519.SH",
+                    "ann_date": "20260320",
+                    "end_date": "20251231",
+                    "n_cashflow_act": 280.0,
+                }
+            ]
+        )
+        fetcher._api.dividend.return_value = pd.DataFrame(
+            [
+                {
+                    "ts_code": "600519.SH",
+                    "end_date": "20251231",
+                    "ann_date": "20260320",
+                    "div_proc": "实施",
+                    "cash_div": 0.9,
+                    "cash_div_tax": 1.0,
+                    "record_date": "20260330",
+                    "ex_date": "20260331",
+                }
+            ]
+        )
+
+        with patch.object(fetcher, "_get_china_now", return_value=datetime(2026, 4, 1, 10, 0)), patch.object(
+            fetcher, "_check_rate_limit"
+        ) as rate_limit_mock:
+            bundle = fetcher.get_fundamental_bundle("600519")
+
+        self.assertEqual(bundle["status"], "ok")
+        self.assertEqual(bundle["valuation"]["pe_ratio"], 20.0)
+        self.assertEqual(bundle["valuation"]["total_mv"], 123456.0 * 10000.0)
+        self.assertEqual(bundle["growth"]["revenue_yoy"], 8.0)
+        report = bundle["earnings"]["financial_report"]
+        self.assertEqual(report["report_date"], "2025-12-31")
+        self.assertEqual(report["net_profit_parent"], 300.0)
+        self.assertEqual(report["operating_cash_flow"], 280.0)
+        dividend = bundle["earnings"]["dividend"]
+        self.assertEqual(dividend["ttm_cash_dividend_per_share"], 1.0)
+        self.assertTrue(dividend["events"][0]["is_pre_tax"])
+        self.assertIn("valuation:tushare_daily_basic", bundle["source_chain"])
+        self.assertEqual(rate_limit_mock.call_count, 5)
+
     def test_convert_stock_code_accepts_exchange_prefixed_a_share(self) -> None:
         fetcher = self._make_fetcher()
 

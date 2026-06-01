@@ -124,6 +124,12 @@ def _compact_fundamental_context(fundamental_context: dict) -> dict:
         "status": fundamental_context.get("status"),
         "coverage": fundamental_context.get("coverage", {}),
     }
+    errors = fundamental_context.get("errors")
+    if isinstance(errors, list) and errors:
+        compact["errors"] = [str(item) for item in errors[:8]]
+    source_chain = fundamental_context.get("source_chain")
+    if isinstance(source_chain, list) and source_chain:
+        compact["source_chain"] = source_chain[:8]
     if fundamental_context.get("snapshot_semantics"):
         compact["snapshot_semantics"] = fundamental_context.get("snapshot_semantics")
     if fundamental_context.get("retrieved_at"):
@@ -131,10 +137,17 @@ def _compact_fundamental_context(fundamental_context: dict) -> dict:
     for block in blocks:
         payload = fundamental_context.get(block, {})
         if isinstance(payload, dict):
-            compact[block] = {
+            block_payload = {
                 "status": payload.get("status"),
                 "data": payload.get("data", {}),
             }
+            block_errors = payload.get("errors")
+            if isinstance(block_errors, list) and block_errors:
+                block_payload["errors"] = [str(item) for item in block_errors[:4]]
+            block_source_chain = payload.get("source_chain")
+            if isinstance(block_source_chain, list) and block_source_chain:
+                block_payload["source_chain"] = block_source_chain[:4]
+            compact[block] = block_payload
         else:
             compact[block] = {"status": "failed", "data": {}}
     return compact

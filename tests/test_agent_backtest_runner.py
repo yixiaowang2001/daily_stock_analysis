@@ -292,8 +292,19 @@ class AgentBacktestRunnerTestCase(unittest.TestCase):
         self.assertIn("information_context", fact)
         self.assertIn("codex_research_fallback", fact)
         self.assertIn("sentiment_context", fact)
+        self.assertIn("long_horizon_context", fact)
         self.assertEqual(fact["fundamental_context"], {"status": "skipped", "reason": "live_data_disabled"})
         self.assertEqual(fact["codex_research_fallback"]["status"], "disabled")
+        self.assertIn("pilot_entry_gate", fact["long_horizon_context"])
+        self.assertIn("long_horizon_context", fact["data_quality"]["layer_status"])
+        self.assertIn("long_horizon_context", payload["evidence"]["data_quality"]["requested_fact_layers"])
+
+        long_context = next(item for item in result["generated"] if item["profile_key"] == "long")
+        long_payload = json.loads(Path(long_context["context_json"]).read_text(encoding="utf-8"))
+        long_guidance = long_payload["evidence"]["profile_decision_guidance"]
+        self.assertTrue(long_guidance["same_stock_pool"])
+        self.assertIn("long_horizon_context", long_guidance["primary_layers"])
+        self.assertIn("100-share pilot buy", long_guidance["pilot_entry_rule"])
 
         medium_context = next(item for item in result["generated"] if item["profile_key"] == "medium")
         medium_payload = json.loads(Path(medium_context["context_json"]).read_text(encoding="utf-8"))
@@ -331,6 +342,95 @@ class AgentBacktestRunnerTestCase(unittest.TestCase):
         self.assertIn("market_data", quality["unavailable_layers"])
         self.assertIn("fundamental_context", quality["unavailable_layers"])
         self.assertIn("information_context", quality["unavailable_layers"])
+
+    def test_long_horizon_context_can_mark_pilot_candidate(self) -> None:
+        daily = [
+            {
+                "date": f"2025-01-{(index % 28) + 1:02d}",
+                "open": 10.0 + index * 0.02,
+                "high": 10.2 + index * 0.02,
+                "low": 9.8 + index * 0.02,
+                "close": 10.0 + index * 0.02,
+                "volume": 100000 + index * 100,
+                "amount": None,
+                "pct_chg": None,
+            }
+            for index in range(260)
+        ]
+        realtime = {
+            "price": daily[-1]["close"],
+            "source": "unit-test",
+            "turnover_rate": 3.2,
+        }
+        technical_context = RunnerContextBuilder._build_technical_context(
+            daily=daily,
+            realtime=realtime,
+            source="unit-test",
+        )
+        fundamental_context = {
+            "pe_ratio": 22.0,
+            "pb_ratio": 2.5,
+            "total_mv": 8000000000.0,
+            "circ_mv": 6000000000.0,
+            "fundamental_context": {
+                "status": "partial",
+                "coverage": {
+                    "valuation": "ok",
+                    "growth": "failed",
+                    "earnings": "failed",
+                    "institution": "failed",
+                    "capital_flow": "failed",
+                    "dragon_tiger": "failed",
+                    "boards": "failed",
+                },
+                "valuation": {
+                    "status": "ok",
+                    "data": {"pe_ratio": 22.0, "pb_ratio": 2.5},
+                },
+            },
+        }
+
+        context = RunnerContextBuilder._build_long_horizon_context(
+            symbol="600519",
+            stock_name="贵州茅台",
+            daily=daily,
+            market_data={"realtime_quote": realtime},
+            technical_context=technical_context,
+            fundamental_context=fundamental_context,
+            information_context={"status": "ok", "results": [{"title": "普通公告"}]},
+            sentiment_context={"status": "derived"},
+        )
+
+        self.assertEqual(context["source"], "derived_from_shared_symbol_facts")
+        self.assertTrue(context["valuation_snapshot"]["has_basic_valuation"])
+        self.assertEqual(context["pilot_entry_gate"]["status"], "candidate")
+        self.assertIn("basic_valuation_available", context["pilot_entry_gate"]["supports"])
+        self.assertIn("growth", context["fundamental_availability"]["unavailable_blocks"])
+
+    def test_realtime_valuation_patches_degraded_fundamental_context(self) -> None:
+        patched = RunnerContextBuilder._merge_realtime_valuation_into_fundamental_context(
+            fundamental_context={
+                "code": "600519",
+                "fundamental_context": {
+                    "status": "partial",
+                    "coverage": {"valuation": "not_supported"},
+                    "valuation": {"status": "not_supported", "data": {}},
+                },
+            },
+            realtime={
+                "source": "tushare",
+                "pe_ratio": 20.0,
+                "pb_ratio": 3.0,
+                "total_mv": 1.2e11,
+                "circ_mv": 1.0e11,
+            },
+        )
+
+        self.assertEqual(patched["pe_ratio"], 20.0)
+        nested = patched["fundamental_context"]
+        self.assertEqual(nested["coverage"]["valuation"], "partial")
+        self.assertEqual(nested["valuation"]["status"], "partial")
+        self.assertEqual(nested["valuation"]["data"]["total_mv"], 1.2e11)
 
     def test_symbol_facts_refreshes_stale_daily_cache_for_trade_date(self) -> None:
         class FakeStockRepo:
@@ -657,6 +757,86 @@ class AgentBacktestRunnerTestCase(unittest.TestCase):
         self.assertIn("贵州茅台 600519 最新消息 公告", fallback["queries"])
         self.assertIn("## Codex Supplemental Research", markdown)
         self.assertIn("600519 贵州茅台: information_context_error", markdown)
+
+    def test_cycle_marks_codex_research_when_fundamental_context_degrades(self) -> None:
+        run = self.service.create_run(
+            name="Runner Codex 基本面兜底",
+            symbols=["600519"],
+            start_date=date(2026, 1, 2),
+        )
+        context_dir = Path(self.temp_dir.name) / "contexts"
+        builder = RunnerContextBuilder(
+            service=self.service,
+            portfolio_service=PortfolioService(),
+            stock_repo=StockRepository(self.db),
+        )
+
+        original_quote = RunnerContextBuilder._fetch_realtime_quote
+        original_fundamental = RunnerContextBuilder._fetch_fundamental_context
+        original_information = RunnerContextBuilder._fetch_information_context
+
+        def fake_fundamental(*, symbol: str, live_data: bool) -> dict:
+            return {
+                "code": symbol,
+                "name": "贵州茅台",
+                "fundamental_context": {
+                    "status": "partial",
+                    "coverage": {
+                        "valuation": "not_supported",
+                        "growth": "failed",
+                        "earnings": "failed",
+                        "institution": "failed",
+                        "capital_flow": "failed",
+                        "dragon_tiger": "failed",
+                        "boards": "failed",
+                    },
+                    "valuation": {"status": "not_supported", "data": {}},
+                    "capital_flow": {
+                        "status": "failed",
+                        "data": {},
+                        "errors": ["capital_flow timeout"],
+                    },
+                },
+            }
+
+        RunnerContextBuilder._fetch_realtime_quote = staticmethod(
+            lambda symbol, **_: {"price": 100.0, "source": "unit-test", "name": "贵州茅台"}
+        )
+        RunnerContextBuilder._fetch_fundamental_context = staticmethod(fake_fundamental)
+        RunnerContextBuilder._fetch_information_context = staticmethod(
+            lambda *, symbol, stock_name, live_data, run=None: {
+                "status": "ok",
+                "success": True,
+                "results_count": 1,
+                "results": [{"title": "ok"}],
+            }
+        )
+        try:
+            result = builder.build_cycle(
+                run_id=run["id"],
+                phase="morning",
+                trade_date=date(2026, 1, 2),
+                observation_time="09:40:00",
+                context_dir=context_dir,
+                live_data=True,
+            )
+        finally:
+            RunnerContextBuilder._fetch_realtime_quote = staticmethod(original_quote)
+            RunnerContextBuilder._fetch_fundamental_context = staticmethod(original_fundamental)
+            RunnerContextBuilder._fetch_information_context = staticmethod(original_information)
+
+        short_context = next(item for item in result["generated"] if item["profile_key"] == "short")
+        payload = json.loads(Path(short_context["context_json"]).read_text(encoding="utf-8"))
+        markdown = Path(short_context["context_markdown"]).read_text(encoding="utf-8")
+        fallback = payload["evidence"]["symbol_facts"]["600519"]["codex_research_fallback"]
+
+        self.assertEqual(fallback["status"], "recommended")
+        self.assertEqual(fallback["source"], "Codex 外部兜底")
+        self.assertIn("fundamental_context_partial", fallback["gap_reasons"])
+        self.assertIn("fundamental_capital_flow_failed", fallback["gap_reasons"])
+        self.assertIn("fundamental_context", fallback["provider_gap_layers"])
+        self.assertIn("贵州茅台 600519 资金流向 主力净流入 龙虎榜", fallback["queries"])
+        self.assertIn("600519 贵州茅台: fundamental_context_partial", markdown)
 
     def test_close_cycle_uses_self_review_contract_without_observation(self) -> None:
         run = self.service.create_run(

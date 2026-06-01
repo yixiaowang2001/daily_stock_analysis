@@ -307,6 +307,7 @@ daily_stock_analysis/
 
 > 行为说明：
 > - A 股：按 `valuation/growth/earnings/institution/capital_flow/dragon_tiger/boards` 聚合能力返回；
+> - 配置 `TUSHARE_TOKEN` 后，A 股 `fundamental_context` 会优先调用 Tushare Pro 的 `daily_basic`、`fina_indicator`、`income`、`cashflow`、`dividend` 填充估值、市值、成长/质量、财报和现金分红；Token 缺失、权限不足或超时时再用 AkShare 聚合块兜底，保持 fail-open；
 > - ETF：返回可得项，缺失能力标记为 `not_supported`，整体不影响原流程；
 > - 美股/港股：返回 `not_supported` 兜底块；
 > - 任何异常走 fail-open，仅记录错误，不影响技术面/新闻/筹码主链路。
@@ -319,6 +320,8 @@ daily_stock_analysis/
 > - A 股大盘复盘报告采用盘后工作台式结构：固定包含盘面温度、指数明细、板块 Top 表、新闻催化、明日交易计划和风险提示；若部分数据源缺失，则保留可用区块并在对应位置降级展示。
 > - 字段契约：
 >   - `fundamental_context.belong_boards` = 个股关联板块列表（当前仅 A 股写入；无数据时为 `[]`）；
+>   - `fundamental_context.valuation.data` = 估值摘要（PE、PE TTM、PB、股息率、总市值、流通市值等；Tushare 市值字段会从万元统一换算为元）；
+>   - `fundamental_context.growth.data` = 成长/质量摘要（营收同比、归母净利润同比、ROE、ROA、毛利率、净利率、资产负债率等）；
 >   - `fundamental_context.boards.data` = `sector_rankings`（板块涨跌榜，结构 `{top, bottom}`）；
 >   - `fundamental_context.earnings.data.financial_report` = 财报摘要（报告期、营收、归母净利润、经营现金流、ROE）；
 >   - `fundamental_context.earnings.data.dividend` = 分红指标（仅现金分红税前口径，含 `events`、`ttm_cash_dividend_per_share`、`ttm_dividend_yield_pct`）；
@@ -331,6 +334,7 @@ daily_stock_analysis/
 > - 超时控制为 `best-effort` 软超时：阶段会按预算快速降级继续执行，但不保证硬中断底层三方调用。
 > - `FUNDAMENTAL_STAGE_TIMEOUT_SECONDS=1.5` 表示新增基本面阶段的目标预算，不是严格硬 SLA。
 > - 若要硬 SLA，请在后续版本升级为子进程隔离执行并在超时后强制终止。
+> - Agent 回测上下文会保留基本面/资金流降级摘要；当估值、业绩、机构、资金流、龙虎榜或板块等块失败、为空或不支持时，`codex_research_fallback` 会把 Codex 标记为 `Codex 外部兜底` 候选数据源，提示补搜公告、财报、估值和公开资金流线索。该兜底仅作为外部公开证据层，不写回 DSA provider 字段，也不替代规范化行情、K 线或 provider 专有资金流。
 
 ### 其他配置
 
@@ -1025,7 +1029,7 @@ python main.py --debug
 
 ### Agent 回测实验台
 
-`/api/v1/agent-backtest` 是多操盘手纸面交易实验 API，支持 `market=cn` 和 `market=us` 两套隔离 run。A 股 run 默认创建短线 / 中线 / 长线三个 profile，并执行 6 位代码、100 股整数手、T+1 卖出和买入现金校验；美股 run 默认创建美股短线 / 中线 / 长线现金账户 profile，并执行 USD、整股、settled cash、卖出资金 T+1 美股工作日释放和滚动 5 个美股工作日最多 1 次日内回转的硬规则。实验股票池与持仓解耦：看盘研究全集等于关注池加所有 active 操盘手账户持仓标的，所有 profile 获得同一份 `symbol_facts`（行情、技术、基本面、资讯、情绪层；资讯搜索失败或美股 run 采用 Codex 优先搜索时还会给出 `codex_research_fallback` 补搜提示），但上下文只暴露去归属的 `portfolio_held_symbols`。Web 前端入口为独立页面 `/agent-backtest`（“操盘”），支持 A 股 / 美股切换，可用每日净值快照对比各操盘手收益曲线、资金曲线、当前权益、策略版本、加入时间、最新决策和事件流。完整说明见 [Agent 回测实验台](agent-backtest-workbench.md)。
+`/api/v1/agent-backtest` 是多操盘手纸面交易实验 API，支持 `market=cn` 和 `market=us` 两套隔离 run。A 股 run 默认创建短线 / 中线 / 长线三个 profile，并执行 6 位代码、100 股整数手、T+1 卖出和买入现金校验；美股 run 默认创建美股短线 / 中线 / 长线现金账户 profile，并执行 USD、整股、settled cash、卖出资金 T+1 美股工作日释放和滚动 5 个美股工作日最多 1 次日内回转的硬规则。实验股票池与持仓解耦：看盘研究全集等于关注池加所有 active 操盘手账户持仓标的，所有 profile 获得同一份 `symbol_facts`（行情、技术、基本面、资讯、情绪层，以及不改变股票池的 `long_horizon_context` 长线结构/估值/试仓门槛；资讯搜索失败、基本面/资金流块降级，或美股 run 采用 Codex 优先搜索时还会给出 `codex_research_fallback` 补搜提示），但上下文只暴露去归属的 `portfolio_held_symbols`。长线 profile 的 `profile_decision_guidance` 会明确：同池观察，满足基础估值、长周期结构、信息风险和现金/整数手约束时才可把买入解释为小试仓。Web 前端入口为独立页面 `/agent-backtest`（“操盘”），支持 A 股 / 美股切换，可用每日净值快照对比各操盘手收益曲线、资金曲线、当前权益、策略版本、加入时间、最新决策和事件流。完整说明见 [Agent 回测实验台](agent-backtest-workbench.md)。
 
 尾盘战术台也提供 Codex Desktop 自动复盘入口：`python scripts/install_tail_tactics_codex_automation.py` 会注册 `dsa-tail-tactics-midday-review`，在每个 A 股工作日 `11:30` 复盘上一交易日已评分且未复盘的尾盘实验。任务通过 `scripts/run_tail_tactics_codex_review.py prepare-review` 拉取/保存早盘指标并生成 Codex 上下文，再由 Codex 生成复盘并用 `apply-review` 写回实验。复盘中的第二层 Agent 评分/预测校准会沉淀到本地记忆并注入后续评分；第一层同花顺筛选调整只作为待确认建议。完整说明见 [尾盘战术台说明](tail-tactics-workbench.md)。
 

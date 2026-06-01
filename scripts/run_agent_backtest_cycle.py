@@ -72,7 +72,32 @@ FACT_LAYER_NAMES = [
     "fundamental_context",
     "information_context",
     "sentiment_context",
+    "long_horizon_context",
 ]
+FUNDAMENTAL_FALLBACK_BLOCKS = (
+    "valuation",
+    "growth",
+    "earnings",
+    "institution",
+    "capital_flow",
+    "dragon_tiger",
+    "boards",
+)
+UNAVAILABLE_FACT_STATUSES = {"failed", "skipped", "no_data", "not_supported", "partial"}
+LONG_HORIZON_RISK_KEYWORDS = (
+    "异常波动",
+    "澄清",
+    "风险",
+    "减持",
+    "处罚",
+    "诉讼",
+    "立案",
+    "问询",
+    "监管",
+    "退市",
+    "跌停",
+    "大宗交易",
+)
 
 
 def parse_symbols(value: str) -> List[str]:
@@ -333,6 +358,7 @@ class RunnerContextBuilder:
             profile_key=profile["profile_key"],
             limit=20,
         )
+        own_events = self._compact_recent_events(own_events)
         watchlist_symbols = shared_symbol_scope.get("watchlist_symbols") or []
         research_symbols = shared_symbol_scope.get("research_symbols") or []
         exit_only_symbols = [symbol for symbol in own_held_symbols if symbol not in watchlist_symbols]
@@ -368,6 +394,10 @@ class RunnerContextBuilder:
             "portfolio_snapshot": portfolio_snapshot,
             "own_recent_events": own_events,
             "symbol_facts": shared_symbol_facts,
+            "profile_decision_guidance": self._profile_decision_guidance(
+                profile=profile,
+                run=run,
+            ),
             "codex_research_policy": self._codex_research_policy(
                 live_data=live_data,
                 data_cutoff_at=data_cutoff_at,
@@ -418,6 +448,150 @@ class RunnerContextBuilder:
                 "ranking as tentative."
             )
         return payload
+
+    @staticmethod
+    def _compact_recent_events(events: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep history useful without embedding prior full evidence snapshots."""
+        if not isinstance(events, dict):
+            return {}
+        return {
+            "observations": [
+                RunnerContextBuilder._compact_observation_event(item)
+                for item in (events.get("observations") or [])
+            ],
+            "decisions": [
+                RunnerContextBuilder._compact_decision_event(item)
+                for item in (events.get("decisions") or [])
+            ],
+            "orders": events.get("orders") or [],
+            "fills": events.get("fills") or [],
+            "daily_nav": [
+                RunnerContextBuilder._compact_nav_event(item)
+                for item in (events.get("daily_nav") or [])
+            ],
+            "history_payload_note": (
+                "Prior observation evidence is summarized here to avoid recursively embedding full "
+                "historical context snapshots."
+            ),
+        }
+
+    @staticmethod
+    def _compact_observation_event(item: Dict[str, Any]) -> Dict[str, Any]:
+        evidence = item.get("evidence") if isinstance(item, dict) else {}
+        scope = evidence.get("symbol_scope") if isinstance(evidence, dict) else {}
+        if not isinstance(scope, dict):
+            scope = {}
+        facts = evidence.get("symbol_facts") if isinstance(evidence, dict) else {}
+        if not isinstance(facts, dict):
+            facts = {}
+        return {
+            "id": item.get("id"),
+            "trade_date": item.get("trade_date"),
+            "observation_time": item.get("observation_time"),
+            "data_cutoff_at": item.get("data_cutoff_at"),
+            "sequence_no": item.get("sequence_no"),
+            "symbols": item.get("symbols") or [],
+            "summary": item.get("summary"),
+            "evidence_summary": {
+                "phase": evidence.get("phase") if isinstance(evidence, dict) else None,
+                "own_held_symbols": scope.get("own_held_symbols") or scope.get("held_symbols") or [],
+                "buy_allowed_symbols": scope.get("buy_allowed_symbols") or [],
+                "exit_only_symbols": scope.get("exit_only_symbols") or [],
+                "research_symbols_count": len(scope.get("research_symbols") or []),
+                "symbol_facts_count": len(facts or {}),
+            },
+            "created_at": item.get("created_at"),
+        }
+
+    @staticmethod
+    def _compact_decision_event(item: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": item.get("id"),
+            "observation_id": item.get("observation_id"),
+            "trade_date": item.get("trade_date"),
+            "decision_time": item.get("decision_time"),
+            "action": item.get("action"),
+            "symbol": item.get("symbol"),
+            "side": item.get("side"),
+            "quantity": item.get("quantity"),
+            "order_type": item.get("order_type"),
+            "limit_price": item.get("limit_price"),
+            "confidence": item.get("confidence"),
+            "rationale": item.get("rationale"),
+            "risk_notes": item.get("risk_notes"),
+            "policy_version_label": item.get("policy_version_label"),
+            "created_at": item.get("created_at"),
+        }
+
+    @staticmethod
+    def _compact_nav_event(item: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": item.get("id"),
+            "trade_date": item.get("trade_date"),
+            "cash": item.get("cash"),
+            "market_value": item.get("market_value"),
+            "total_equity": item.get("total_equity"),
+            "realized_pnl": item.get("realized_pnl"),
+            "unrealized_pnl": item.get("unrealized_pnl"),
+            "valuation_stale": item.get("valuation_stale"),
+            "created_at": item.get("created_at"),
+            "updated_at": item.get("updated_at"),
+        }
+
+    @staticmethod
+    def _profile_decision_guidance(
+        *,
+        profile: Dict[str, Any],
+        run: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        style = str(profile.get("style_profile") or profile.get("profile_key") or "").strip().lower()
+        market = str((run or {}).get("market") or "cn").strip().lower()
+        guidance: Dict[str, Any] = {
+            "same_stock_pool": True,
+            "profile_style": style,
+            "symbol_fact_policy": (
+                "All profiles receive the same symbol_facts for the same research_symbols. "
+                "Use the profile policy to decide which evidence layers matter most."
+            ),
+            "no_trade_required": True,
+        }
+        if style == "long":
+            guidance.update(
+                {
+                    "primary_layers": [
+                        "long_horizon_context",
+                        "fundamental_context",
+                        "technical_context",
+                        "information_context",
+                    ],
+                    "same_pool_note": (
+                        "The long profile does not get a separate stock pool. It should evaluate the shared "
+                        "watchlist through long-horizon gates instead of importing other candidates."
+                    ),
+                    "pilot_entry_rule": (
+                        "Observe/hold is valid. For A-share runs, a 100-share pilot buy is allowed only when "
+                        "the symbol is in evidence.symbol_scope.buy_allowed_symbols, "
+                        "long_horizon_context.pilot_entry_gate.status is candidate, cash/lot checks pass, "
+                        "and no material pre-cutoff information risk is unresolved."
+                        if market == "cn"
+                        else "Observe/hold is valid. A small whole-share pilot buy is allowed only when "
+                        "the symbol is in evidence.symbol_scope.buy_allowed_symbols, "
+                        "long_horizon_context.pilot_entry_gate.status is candidate, settled-cash checks pass, "
+                        "and no material pre-cutoff information risk is unresolved."
+                    ),
+                    "data_gap_handling": (
+                        "Do not require every provider fundamental block to be perfect before considering a "
+                        "pilot entry; require at least basic valuation/market-cap evidence, record missing "
+                        "earnings/growth/institution/capital-flow blocks in risk_notes, and use Codex external "
+                        "fallback only under codex_research_policy."
+                    ),
+                    "position_sizing_note": (
+                        "Treat intraday tail-session buys as pilot entries only. Full long allocation should "
+                        "wait for after-close or weekly confirmation unless policy is explicitly evolved."
+                    ),
+                }
+            )
+        return guidance
 
     def _symbol_facts(
         self,
@@ -545,6 +719,10 @@ class RunnerContextBuilder:
             technical_source = f"{daily_source}+{provisional_daily_bar.get('source') or 'intraday_1m_cutoff'}"
         technical_context = self._build_technical_context(daily=daily, realtime=realtime, source=technical_source)
         fundamental_context = self._fetch_fundamental_context(symbol=symbol, live_data=live_data)
+        fundamental_context = self._merge_realtime_valuation_into_fundamental_context(
+            fundamental_context=fundamental_context,
+            realtime=realtime,
+        )
         information_context = self._fetch_information_context(
             symbol=symbol,
             stock_name=stock_name,
@@ -555,12 +733,23 @@ class RunnerContextBuilder:
             symbol=symbol,
             stock_name=stock_name,
             information_context=information_context,
+            fundamental_context=fundamental_context,
             live_data=live_data,
         )
         sentiment_context = self._build_sentiment_context(
             realtime=realtime,
             information_context=information_context,
             live_data=live_data,
+        )
+        long_horizon_context = self._build_long_horizon_context(
+            symbol=symbol,
+            stock_name=stock_name,
+            daily=daily,
+            market_data=market_data,
+            technical_context=technical_context,
+            fundamental_context=fundamental_context,
+            information_context=information_context,
+            sentiment_context=sentiment_context,
         )
         return {
             "schema_version": "agent_backtest_symbol_facts_v3",
@@ -576,6 +765,7 @@ class RunnerContextBuilder:
             "information_context": information_context,
             "codex_research_fallback": codex_research_fallback,
             "sentiment_context": sentiment_context,
+            "long_horizon_context": long_horizon_context,
             "data_quality": self._fact_data_quality(
                 {
                     "market_data": market_data,
@@ -583,6 +773,7 @@ class RunnerContextBuilder:
                     "fundamental_context": fundamental_context,
                     "information_context": information_context,
                     "sentiment_context": sentiment_context,
+                    "long_horizon_context": long_horizon_context,
                 }
             ),
         }
@@ -1003,6 +1194,355 @@ class RunnerContextBuilder:
         }
 
     @staticmethod
+    def _build_long_horizon_context(
+        *,
+        symbol: str,
+        stock_name: str,
+        daily: List[Dict[str, Any]],
+        market_data: Dict[str, Any],
+        technical_context: Dict[str, Any],
+        fundamental_context: Dict[str, Any],
+        information_context: Dict[str, Any],
+        sentiment_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        realtime = market_data.get("realtime_quote") if isinstance(market_data, dict) else {}
+        current_price = (
+            RunnerContextBuilder._safe_float((technical_context or {}).get("current_price"))
+            or RunnerContextBuilder._quote_price(realtime if isinstance(realtime, dict) else {})
+        )
+        closes = [RunnerContextBuilder._safe_float(row.get("close")) for row in daily]
+        closes = [value for value in closes if value is not None and value > 0]
+        moving_averages = (technical_context or {}).get("moving_averages")
+        if not isinstance(moving_averages, dict):
+            moving_averages = {}
+        returns = (technical_context or {}).get("returns")
+        if not isinstance(returns, dict):
+            returns = {}
+
+        technical_structure = {
+            "current_price": current_price,
+            "latest_daily_date": (technical_context or {}).get("latest_daily_date"),
+            "bars_available": (technical_context or {}).get("bars_available") or len(daily),
+            "moving_average_alignment": {
+                key: moving_averages.get(key)
+                for key in ("ma60", "ma120", "ma250")
+                if key in moving_averages
+            },
+            "all_moving_averages": moving_averages,
+            "returns": {
+                key: returns.get(key)
+                for key in ("return_20d_pct", "return_60d_pct", "return_120d_pct")
+                if key in returns
+            },
+            "price_windows": {
+                f"{days}d": RunnerContextBuilder._price_window_context(
+                    daily=daily,
+                    days=days,
+                    current_price=current_price,
+                )
+                for days in (20, 60, 120, 250)
+            },
+            "volume": (technical_context or {}).get("volume") or {},
+        }
+        valuation_snapshot = RunnerContextBuilder._valuation_snapshot(
+            fundamental_context=fundamental_context,
+            realtime=realtime if isinstance(realtime, dict) else {},
+        )
+        fundamental_availability = RunnerContextBuilder._fundamental_availability(
+            fundamental_context=fundamental_context,
+            valuation_snapshot=valuation_snapshot,
+        )
+        information_risk_flags = RunnerContextBuilder._information_risk_flags(information_context)
+        pilot_entry_gate = RunnerContextBuilder._long_pilot_entry_gate(
+            technical_structure=technical_structure,
+            valuation_snapshot=valuation_snapshot,
+            fundamental_availability=fundamental_availability,
+            information_risk_flags=information_risk_flags,
+            sentiment_context=sentiment_context,
+        )
+
+        status = "ok"
+        if not closes and current_price is None:
+            status = "no_data"
+        elif (
+            fundamental_availability["critical_gaps"]
+            or information_risk_flags
+            or pilot_entry_gate["status"] in {"blocked", "watch"}
+        ):
+            status = "partial"
+
+        return {
+            "status": status,
+            "source": "derived_from_shared_symbol_facts",
+            "symbol": symbol,
+            "name": stock_name,
+            "horizon": "long",
+            "technical_structure": technical_structure,
+            "valuation_snapshot": valuation_snapshot,
+            "fundamental_availability": fundamental_availability,
+            "information_risk_flags": information_risk_flags,
+            "pilot_entry_gate": pilot_entry_gate,
+            "interpretation_note": (
+                "This is a derived long-profile checklist over the same shared symbol_facts. "
+                "It does not change the watchlist and is not an automatic trading signal."
+            ),
+        }
+
+    @staticmethod
+    def _price_window_context(
+        *,
+        daily: List[Dict[str, Any]],
+        days: int,
+        current_price: Optional[float],
+    ) -> Dict[str, Any]:
+        rows = daily[-days:] if daily else []
+        highs = [RunnerContextBuilder._safe_float(row.get("high")) for row in rows]
+        lows = [RunnerContextBuilder._safe_float(row.get("low")) for row in rows]
+        highs = [value for value in highs if value is not None and value > 0]
+        lows = [value for value in lows if value is not None and value > 0]
+        window_high = max(highs) if highs else None
+        window_low = min(lows) if lows else None
+        drawdown_from_high_pct = None
+        upside_from_low_pct = None
+        if current_price is not None and window_high:
+            drawdown_from_high_pct = round((current_price - window_high) / window_high * 100, 2)
+        if current_price is not None and window_low:
+            upside_from_low_pct = round((current_price - window_low) / window_low * 100, 2)
+        return {
+            "bars": len(rows),
+            "high": window_high,
+            "low": window_low,
+            "drawdown_from_high_pct": drawdown_from_high_pct,
+            "upside_from_low_pct": upside_from_low_pct,
+        }
+
+    @staticmethod
+    def _valuation_snapshot(
+        *,
+        fundamental_context: Dict[str, Any],
+        realtime: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        nested = RunnerContextBuilder._nested_fundamental_context(fundamental_context)
+        valuation = nested.get("valuation") if isinstance(nested, dict) else {}
+        valuation_data = valuation.get("data") if isinstance(valuation, dict) else {}
+        if not isinstance(valuation_data, dict):
+            valuation_data = {}
+
+        pe_ratio = RunnerContextBuilder._first_float(
+            (fundamental_context or {}).get("pe_ratio"),
+            valuation_data.get("pe_ratio"),
+            (realtime or {}).get("pe_ratio"),
+        )
+        pb_ratio = RunnerContextBuilder._first_float(
+            (fundamental_context or {}).get("pb_ratio"),
+            valuation_data.get("pb_ratio"),
+            (realtime or {}).get("pb_ratio"),
+        )
+        total_mv = RunnerContextBuilder._first_float(
+            (fundamental_context or {}).get("total_mv"),
+            valuation_data.get("total_mv"),
+            (realtime or {}).get("total_mv"),
+        )
+        circ_mv = RunnerContextBuilder._first_float(
+            (fundamental_context or {}).get("circ_mv"),
+            valuation_data.get("circ_mv"),
+            (realtime or {}).get("circ_mv"),
+        )
+        source = "missing"
+        if any(value is not None for value in (pe_ratio, pb_ratio, total_mv, circ_mv)):
+            source = "fundamental_context.valuation_or_realtime_quote"
+        flags: List[str] = []
+        if pe_ratio is not None and pe_ratio > 100:
+            flags.append("pe_ratio_above_100")
+        if pb_ratio is not None and pb_ratio > 10:
+            flags.append("pb_ratio_above_10")
+        return {
+            "pe_ratio": pe_ratio,
+            "pb_ratio": pb_ratio,
+            "total_mv": total_mv,
+            "circ_mv": circ_mv,
+            "source": source,
+            "has_basic_valuation": any(value is not None for value in (pe_ratio, pb_ratio, total_mv, circ_mv)),
+            "valuation_flags": flags,
+        }
+
+    @staticmethod
+    def _fundamental_availability(
+        *,
+        fundamental_context: Dict[str, Any],
+        valuation_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        nested = RunnerContextBuilder._nested_fundamental_context(fundamental_context)
+        coverage = nested.get("coverage") if isinstance(nested, dict) else {}
+        if not isinstance(coverage, dict):
+            coverage = {}
+
+        block_status: Dict[str, str] = {}
+        available_blocks: List[str] = []
+        unavailable_blocks: List[str] = []
+        for block in FUNDAMENTAL_FALLBACK_BLOCKS:
+            payload = nested.get(block) if isinstance(nested, dict) else {}
+            payload_status = payload.get("status") if isinstance(payload, dict) else None
+            status = str(coverage.get(block) or payload_status or "unknown").strip().lower()
+            block_status[block] = status
+            payload_data = payload.get("data") if isinstance(payload, dict) else None
+            has_data = bool(payload_data) if isinstance(payload_data, (dict, list)) else payload_data is not None
+            if status in UNAVAILABLE_FACT_STATUSES or status == "unknown":
+                unavailable_blocks.append(block)
+            elif has_data or status in {"ok", "available", "success"}:
+                available_blocks.append(block)
+            else:
+                unavailable_blocks.append(block)
+
+        has_basic_valuation = bool((valuation_snapshot or {}).get("has_basic_valuation"))
+        critical_gaps: List[str] = []
+        if not has_basic_valuation:
+            critical_gaps.append("basic_valuation_missing")
+        if block_status.get("valuation") in {"failed", "not_supported", "no_data"} and not has_basic_valuation:
+            critical_gaps.append(f"valuation_{block_status.get('valuation')}")
+
+        return {
+            "status": str((nested or {}).get("status") or (fundamental_context or {}).get("status") or "unknown"),
+            "coverage": block_status,
+            "available_blocks": available_blocks,
+            "unavailable_blocks": unavailable_blocks,
+            "has_basic_valuation": has_basic_valuation,
+            "has_earnings": "earnings" in available_blocks,
+            "has_growth": "growth" in available_blocks,
+            "has_institution": "institution" in available_blocks,
+            "has_capital_flow": "capital_flow" in available_blocks,
+            "critical_gaps": RunnerContextBuilder._dedupe_keep_order(critical_gaps),
+            "data_gap_note": (
+                "Missing earnings/growth/institution/capital_flow blocks reduce confidence, but do not by "
+                "themselves forbid a 100-share pilot entry when valuation and long structure are acceptable."
+            ),
+        }
+
+    @staticmethod
+    def _information_risk_flags(information_context: Dict[str, Any]) -> List[Dict[str, str]]:
+        if not isinstance(information_context, dict):
+            return []
+        raw_results = information_context.get("results") or information_context.get("items") or []
+        if not isinstance(raw_results, list):
+            return []
+        flags: List[Dict[str, str]] = []
+        for item in raw_results[:10]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or item.get("headline") or "").strip()
+            snippet = str(item.get("snippet") or item.get("summary") or item.get("content") or "").strip()
+            text = f"{title} {snippet}"
+            for keyword in LONG_HORIZON_RISK_KEYWORDS:
+                if keyword in text:
+                    flags.append(
+                        {
+                            "keyword": keyword,
+                            "title": title[:120],
+                        }
+                    )
+                    break
+        return flags[:5]
+
+    @staticmethod
+    def _long_pilot_entry_gate(
+        *,
+        technical_structure: Dict[str, Any],
+        valuation_snapshot: Dict[str, Any],
+        fundamental_availability: Dict[str, Any],
+        information_risk_flags: List[Dict[str, str]],
+        sentiment_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        blockers: List[str] = []
+        supports: List[str] = []
+        warnings: List[str] = []
+
+        current_price = RunnerContextBuilder._safe_float(technical_structure.get("current_price"))
+        if current_price is None:
+            blockers.append("current_price_missing")
+
+        ma = technical_structure.get("moving_average_alignment") or {}
+        ma60 = ma.get("ma60") if isinstance(ma, dict) else None
+        ma120 = ma.get("ma120") if isinstance(ma, dict) else None
+        ma250 = ma.get("ma250") if isinstance(ma, dict) else None
+        if isinstance(ma60, dict) and ma60.get("price_above") is True:
+            supports.append("price_above_ma60")
+        elif isinstance(ma60, dict) and ma60.get("price_above") is False:
+            blockers.append("price_below_ma60")
+        else:
+            blockers.append("ma60_missing")
+        if isinstance(ma120, dict) and ma120.get("price_above") is True:
+            supports.append("price_above_ma120")
+        elif isinstance(ma120, dict) and ma120.get("price_above") is False:
+            warnings.append("price_below_ma120")
+        if isinstance(ma250, dict) and ma250.get("price_above") is True:
+            supports.append("price_above_ma250")
+
+        returns = technical_structure.get("returns") or {}
+        return_60d = RunnerContextBuilder._safe_float(returns.get("return_60d_pct"))
+        return_120d = RunnerContextBuilder._safe_float(returns.get("return_120d_pct"))
+        if return_60d is not None:
+            if return_60d >= 0:
+                supports.append("return_60d_non_negative")
+            elif return_60d < -20:
+                blockers.append("return_60d_below_minus_20")
+        if return_120d is not None and return_120d >= 0:
+            supports.append("return_120d_non_negative")
+
+        ma20 = (technical_structure.get("moving_average_alignment") or {}).get("ma20")
+        if not isinstance(ma20, dict):
+            full_ma = technical_structure.get("all_moving_averages") or {}
+            ma20 = full_ma.get("ma20") if isinstance(full_ma, dict) else None
+        ma20_bias = RunnerContextBuilder._safe_float(ma20.get("bias_pct")) if isinstance(ma20, dict) else None
+        if ma20_bias is not None and ma20_bias > 35:
+            blockers.append("ma20_bias_above_35")
+
+        return_20d = RunnerContextBuilder._safe_float(returns.get("return_20d_pct"))
+        if return_20d is not None and return_20d > 60:
+            blockers.append("return_20d_above_60")
+
+        volume = technical_structure.get("volume") or {}
+        turnover = RunnerContextBuilder._safe_float(volume.get("realtime_turnover_rate"))
+        if turnover is not None and turnover > 15:
+            blockers.append("turnover_rate_above_15")
+
+        if valuation_snapshot.get("has_basic_valuation"):
+            supports.append("basic_valuation_available")
+        else:
+            blockers.append("basic_valuation_missing")
+        for flag in valuation_snapshot.get("valuation_flags") or []:
+            warnings.append(str(flag))
+
+        for gap in fundamental_availability.get("critical_gaps") or []:
+            blockers.append(str(gap))
+        for block in ("earnings", "growth", "institution", "capital_flow"):
+            if block in (fundamental_availability.get("unavailable_blocks") or []):
+                warnings.append(f"{block}_unavailable")
+
+        if information_risk_flags:
+            blockers.append("pre_cutoff_information_risk_flag")
+
+        if isinstance(sentiment_context, dict):
+            risk_level = str(sentiment_context.get("risk_level") or "").strip().lower()
+            if risk_level in {"high", "elevated"}:
+                warnings.append(f"sentiment_risk_{risk_level}")
+
+        blockers = RunnerContextBuilder._dedupe_keep_order(blockers)
+        supports = RunnerContextBuilder._dedupe_keep_order(supports)
+        warnings = RunnerContextBuilder._dedupe_keep_order(warnings)
+        status = "blocked" if blockers else ("candidate" if len(supports) >= 3 else "watch")
+        return {
+            "status": status,
+            "supports": supports,
+            "blocking_reasons": blockers,
+            "warnings": warnings,
+            "pilot_size_rule": "A-share pilot entries must still be positive multiples of 100 shares and pass cash checks.",
+            "decision_note": (
+                "candidate permits consideration of a small pilot buy; blocked/watch means observe or hold unless "
+                "the policy is explicitly evolved with stronger evidence."
+            ),
+        }
+
+    @staticmethod
     def _return_pct(values: List[float], days: int) -> Optional[float]:
         if len(values) <= days:
             return None
@@ -1030,6 +1570,14 @@ class RunnerContextBuilder:
         return parsed
 
     @staticmethod
+    def _first_float(*values: Any) -> Optional[float]:
+        for value in values:
+            parsed = RunnerContextBuilder._safe_float(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    @staticmethod
     def _fetch_fundamental_context(*, symbol: str, live_data: bool) -> Dict[str, Any]:
         if not live_data:
             return {"status": "skipped", "reason": "live_data_disabled"}
@@ -1041,6 +1589,72 @@ class RunnerContextBuilder:
             return {"status": "failed", "error": str(exc)}
 
     @staticmethod
+    def _merge_realtime_valuation_into_fundamental_context(
+        *,
+        fundamental_context: Dict[str, Any],
+        realtime: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not isinstance(fundamental_context, dict) or not isinstance(realtime, dict):
+            return fundamental_context
+        valuation_fields = {
+            "pe_ratio": RunnerContextBuilder._safe_float(realtime.get("pe_ratio")),
+            "pb_ratio": RunnerContextBuilder._safe_float(realtime.get("pb_ratio")),
+            "total_mv": RunnerContextBuilder._safe_float(realtime.get("total_mv")),
+            "circ_mv": RunnerContextBuilder._safe_float(realtime.get("circ_mv")),
+        }
+        valuation_fields = {key: value for key, value in valuation_fields.items() if value is not None}
+        if not valuation_fields:
+            return fundamental_context
+
+        patched = dict(fundamental_context)
+        for key, value in valuation_fields.items():
+            patched.setdefault(key, value)
+
+        nested = patched.get("fundamental_context")
+        if not isinstance(nested, dict):
+            return patched
+        nested = dict(nested)
+        valuation_block = nested.get("valuation")
+        if not isinstance(valuation_block, dict):
+            valuation_block = {"status": "partial", "data": {}}
+        else:
+            valuation_block = dict(valuation_block)
+        valuation_data = valuation_block.get("data")
+        if not isinstance(valuation_data, dict):
+            valuation_data = {}
+        else:
+            valuation_data = dict(valuation_data)
+        changed = False
+        for key, value in valuation_fields.items():
+            if valuation_data.get(key) is None:
+                valuation_data[key] = value
+                changed = True
+        if changed:
+            valuation_block["data"] = valuation_data
+            if str(valuation_block.get("status") or "").lower() in UNAVAILABLE_FACT_STATUSES:
+                valuation_block["status"] = "partial"
+            if str(nested.get("status") or "").lower() in {"not_supported", "failed", "no_data"}:
+                nested["status"] = "partial"
+            source_chain = list(valuation_block.get("source_chain") or [])
+            source_chain.append(
+                {
+                    "provider": f"realtime_quote:{realtime.get('source') or 'unknown'}",
+                    "result": "valuation_fallback",
+                    "duration_ms": 0,
+                }
+            )
+            valuation_block["source_chain"] = source_chain
+            nested["valuation"] = valuation_block
+            coverage = nested.get("coverage")
+            if isinstance(coverage, dict):
+                coverage = dict(coverage)
+                if str(coverage.get("valuation") or "").lower() in UNAVAILABLE_FACT_STATUSES:
+                    coverage["valuation"] = "partial"
+                nested["coverage"] = coverage
+            patched["fundamental_context"] = nested
+        return patched
+
+    @staticmethod
     def _codex_research_policy(*, live_data: bool, data_cutoff_at: datetime) -> Dict[str, Any]:
         return {
             "enabled": bool(live_data),
@@ -1049,6 +1663,10 @@ class RunnerContextBuilder:
                 "Use Codex supplemental web/search research when a symbol's "
                 "codex_research_fallback.status is recommended, or when a trade decision materially depends "
                 "on fresh information not covered by information_context."
+            ),
+            "triage_rule": (
+                "For broad watchlists, research held symbols, likely buy/sell candidates, and large movers first; "
+                "record unresolved lower-impact gaps instead of doing unfocused broad searches."
             ),
             "cutoff_rule": "Use only public information available at or before data_cutoff_at.",
             "source_priority": [
@@ -1090,28 +1708,117 @@ class RunnerContextBuilder:
         return None
 
     @staticmethod
-    def _codex_research_queries(*, symbol: str, stock_name: str) -> List[str]:
+    def _codex_research_queries(
+        *,
+        symbol: str,
+        stock_name: str,
+        gap_reasons: Optional[List[str]] = None,
+    ) -> List[str]:
         display_name = (stock_name or symbol or "").strip()
         code = (symbol or "").strip()
         is_us_symbol = bool(code.isupper() and not code.isdigit())
+        gap_text = " ".join(gap_reasons or [])
         if is_us_symbol:
             display = display_name if display_name and display_name != code else code
-            return [
+            queries = [
                 f"{display} {code} latest stock news earnings guidance SEC filing",
                 f"{display} {code} premarket after hours overnight trading news",
                 f"{display} {code} analyst rating sector ETF peer performance risk",
             ]
+            if "fundamental" in gap_text:
+                queries.extend(
+                    [
+                        f"{display} {code} SEC 10-Q 8-K earnings investor relations",
+                        f"{display} {code} valuation revenue margin cash flow guidance",
+                    ]
+                )
+            if "capital_flow" in gap_text:
+                queries.append(f"{display} {code} institutional ownership fund flow short interest")
+            return RunnerContextBuilder._dedupe_keep_order(queries)[:6]
+
         if display_name == code:
-            return [
+            queries = [
                 f"{code} 最新消息 公告",
                 f"{code} 减持 处罚 诉讼 风险",
                 f"{code} 业绩预告 财报 机构调研",
             ]
-        return [
-            f"{display_name} {code} 最新消息 公告",
-            f"{display_name} {code} 减持 处罚 诉讼 风险",
-            f"{display_name} {code} 业绩预告 财报 机构调研",
-        ]
+        else:
+            queries = [
+                f"{display_name} {code} 最新消息 公告",
+                f"{display_name} {code} 减持 处罚 诉讼 风险",
+                f"{display_name} {code} 业绩预告 财报 机构调研",
+            ]
+        if "fundamental" in gap_text:
+            queries.append(f"{display_name} {code} 财报 营收 净利润 现金流 ROE 估值")
+        if "valuation" in gap_text:
+            queries.append(f"{display_name} {code} PE PB 市值 估值 东方财富")
+        if "capital_flow" in gap_text:
+            queries.append(f"{display_name} {code} 资金流向 主力净流入 龙虎榜")
+        return RunnerContextBuilder._dedupe_keep_order(queries)[:6]
+
+    @staticmethod
+    def _dedupe_keep_order(items: List[str]) -> List[str]:
+        seen = set()
+        deduped: List[str] = []
+        for item in items:
+            normalized = str(item or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+        return deduped
+
+    @staticmethod
+    def _nested_fundamental_context(fundamental_context: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(fundamental_context, dict):
+            return {}
+        nested = fundamental_context.get("fundamental_context")
+        if isinstance(nested, dict):
+            return nested
+        return fundamental_context
+
+    @staticmethod
+    def _fundamental_context_gap_reasons(fundamental_context: Dict[str, Any]) -> List[str]:
+        if not isinstance(fundamental_context, dict):
+            return ["fundamental_context_invalid"]
+        nested = RunnerContextBuilder._nested_fundamental_context(fundamental_context)
+        if not nested:
+            return ["fundamental_context_empty"]
+
+        reasons: List[str] = []
+        status = str(nested.get("status") or fundamental_context.get("status") or "").strip().lower()
+        if status in UNAVAILABLE_FACT_STATUSES:
+            reasons.append(f"fundamental_context_{status}")
+
+        coverage = nested.get("coverage")
+        if isinstance(coverage, dict):
+            for block in FUNDAMENTAL_FALLBACK_BLOCKS:
+                block_status = str(coverage.get(block) or "").strip().lower()
+                if block_status in UNAVAILABLE_FACT_STATUSES:
+                    reasons.append(f"fundamental_{block}_{block_status}")
+
+        for block in FUNDAMENTAL_FALLBACK_BLOCKS:
+            block_payload = nested.get(block)
+            if not isinstance(block_payload, dict):
+                continue
+            block_status = str(block_payload.get("status") or "").strip().lower()
+            if block_status in UNAVAILABLE_FACT_STATUSES:
+                reasons.append(f"fundamental_{block}_{block_status}")
+
+        return RunnerContextBuilder._dedupe_keep_order(reasons)
+
+    @staticmethod
+    def _provider_gap_layers(
+        *,
+        information_gap: Optional[str],
+        fundamental_gaps: List[str],
+    ) -> Dict[str, List[str]]:
+        layers: Dict[str, List[str]] = {}
+        if information_gap:
+            layers["information_context"] = [information_gap]
+        if fundamental_gaps:
+            layers["fundamental_context"] = fundamental_gaps
+        return layers
 
     @staticmethod
     def _build_codex_research_fallback(
@@ -1119,28 +1826,56 @@ class RunnerContextBuilder:
         symbol: str,
         stock_name: str,
         information_context: Dict[str, Any],
+        fundamental_context: Dict[str, Any],
         live_data: bool,
     ) -> Dict[str, Any]:
         if not live_data:
             return {
                 "status": "disabled",
                 "reason": "live_data_disabled",
+                "gap_reasons": [],
+                "provider_gap_layers": {},
                 "queries": [],
             }
 
-        gap_reason = RunnerContextBuilder._information_context_gap_reason(information_context)
+        information_gap = RunnerContextBuilder._information_context_gap_reason(information_context)
+        fundamental_gaps = RunnerContextBuilder._fundamental_context_gap_reasons(fundamental_context)
+        gap_reasons = RunnerContextBuilder._dedupe_keep_order(
+            ([information_gap] if information_gap else []) + fundamental_gaps
+        )
+        provider_gap_layers = RunnerContextBuilder._provider_gap_layers(
+            information_gap=information_gap,
+            fundamental_gaps=fundamental_gaps,
+        )
         return {
-            "status": "recommended" if gap_reason else "optional",
-            "reason": gap_reason or "information_context_available",
+            "status": "recommended" if gap_reasons else "optional",
+            "source": "Codex 外部兜底",
+            "reason": gap_reasons[0] if gap_reasons else "provider_context_available",
+            "gap_reasons": gap_reasons,
+            "provider_gap_layers": provider_gap_layers,
+            "scope": "supplemental_public_evidence_not_provider_replacement",
             "queries": RunnerContextBuilder._codex_research_queries(
                 symbol=symbol,
                 stock_name=stock_name,
+                gap_reasons=gap_reasons,
             ),
+            "can_supplement": [
+                "exchange/company announcements and financial reports",
+                "timestamped reputable media about catalysts and risks",
+                "public valuation, ownership, fund-flow, and dragon-tiger-board pages when timestamped",
+            ],
+            "cannot_replace": [
+                "DSA normalized quotes, K-lines, or intraday point-in-time bars",
+                "proprietary or unavailable provider-only capital-flow datasets",
+                "unlabeled facts inside fundamental_context or information_context",
+            ],
             "instructions": [
                 "Use Codex available web/search/browser tools only as a supplemental evidence layer.",
+                "Label any used fact as Codex 外部兜底 and keep it separate from DSA provider facts.",
                 "Respect evidence.data_cutoff_at and do not use later information for intraday decisions.",
-                "Prefer official announcements and timestamped reputable financial media.",
+                "Prefer official announcements, financial reports, and timestamped reputable financial media.",
                 "Cite title/source/date/url when supplemental research is used.",
+                "If only post-cutoff sources are found, record them as ignored_post_cutoff and do not use them for the decision.",
             ],
         }
 
@@ -1657,8 +2392,9 @@ print(json.dumps(payload, ensure_ascii=False))
 
         lines = [
             (
-                "- Use Codex web/search tools for these information gaps before deciding. "
-                "Respect data_cutoff_at and cite title/date/url when used."
+                "- Use Codex web/search tools as labeled external evidence for these gaps before deciding. "
+                "Triage held symbols, likely buy/sell candidates, and large movers first; respect data_cutoff_at "
+                "and cite title/date/url when used."
             )
         ]
         for symbol, name, reason, queries in recommended:
