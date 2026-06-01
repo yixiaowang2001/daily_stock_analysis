@@ -222,6 +222,18 @@ const events = {
       },
     },
     {
+      id: 4,
+      runId: 1,
+      profileId: 1,
+      tradeDate: '2026-05-26',
+      cash: 20080,
+      marketValue: 0,
+      totalEquity: 20080,
+      realizedPnl: 80,
+      unrealizedPnl: 0,
+      payload: { positions: [] },
+    },
+    {
       id: 2,
       runId: 1,
       profileId: 2,
@@ -234,6 +246,18 @@ const events = {
       payload: { positions: [] },
     },
     {
+      id: 5,
+      runId: 1,
+      profileId: 2,
+      tradeDate: '2026-05-26',
+      cash: 19950,
+      marketValue: 0,
+      totalEquity: 19950,
+      realizedPnl: -50,
+      unrealizedPnl: 0,
+      payload: { positions: [] },
+    },
+    {
       id: 3,
       runId: 1,
       profileId: 3,
@@ -242,6 +266,18 @@ const events = {
       marketValue: 0,
       totalEquity: 19860,
       realizedPnl: -140,
+      unrealizedPnl: 0,
+      payload: { positions: [] },
+    },
+    {
+      id: 6,
+      runId: 1,
+      profileId: 3,
+      tradeDate: '2026-05-26',
+      cash: 20000,
+      marketValue: 0,
+      totalEquity: 20000,
+      realizedPnl: 0,
       unrealizedPnl: 0,
       payload: { positions: [] },
     },
@@ -309,10 +345,15 @@ describe('AgentBacktestPage', () => {
     expect(screen.getByTestId('line-medium')).toBeInTheDocument();
     expect(screen.getByTestId('line-long')).toBeInTheDocument();
     expect(screen.getAllByText('当前权益')).toHaveLength(3);
+    expect(screen.getAllByText('当日盈亏')).toHaveLength(3);
     expect(screen.getAllByText('策略版本')).toHaveLength(3);
     expect(screen.getAllByText(/加入/)).toHaveLength(3);
     expect(screen.getByText('v1.0-short')).toBeInTheDocument();
     expect(screen.getByText('+0.60%')).toBeInTheDocument();
+    expect(screen.getByText('+¥40.00')).toBeInTheDocument();
+    expect(screen.getByText('+0.20%')).toBeInTheDocument();
+    const shortProfileCardText = screen.getByRole('button', { name: '查看短线操盘手持仓明细' }).textContent || '';
+    expect(shortProfileCardText.indexOf('+0.20%')).toBeLessThan(shortProfileCardText.indexOf('+¥40.00'));
     expect(screen.getAllByText(/验证日不交易/).length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: '记录收盘净值' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '保存设置' })).not.toBeInTheDocument();
@@ -322,7 +363,11 @@ describe('AgentBacktestPage', () => {
 
     await waitFor(() => {
       expect(mockListRuns).toHaveBeenCalledWith({ market: 'cn', limit: 20 });
-      expect(mockListEvents).toHaveBeenCalledWith(1, { limit: 300 });
+      expect(mockListEvents).toHaveBeenCalledWith(1, {
+        limit: 300,
+        includeEvidence: false,
+        includeRawOutput: false,
+      });
     });
   });
 
@@ -417,6 +462,11 @@ describe('AgentBacktestPage', () => {
     expect(card.getByText('建仓均价')).toBeInTheDocument();
     expect(card.getByText('当前价')).toBeInTheDocument();
     expect(card.getByText('涨跌幅')).toBeInTheDocument();
+    expect(card.getByText('当日盈亏')).toBeInTheDocument();
+    expect(card.getByText('+¥40.00')).toBeInTheDocument();
+    expect(card.getByText('+0.20%')).toBeInTheDocument();
+    const dialogText = dialog.textContent || '';
+    expect(dialogText.indexOf('+0.20%')).toBeLessThan(dialogText.indexOf('+¥40.00'));
     expect(card.getByText('+2.78%')).toBeInTheDocument();
     expect(card.getByText('68.166')).toBeInTheDocument();
     expect(card.getByText('70.06')).toBeInTheDocument();

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [改进] 操盘页面当日盈亏展示调整为收益率主视觉、盈亏金额辅助信息，便于快速扫描操盘手日内表现。
+- [改进] 操盘页面操盘手卡片新增风格缩略图与当日盈亏展示，并在详情弹窗同步显示最新净值相对上一净值日的盈亏变化。
+- [修复] 操盘页面读取 Agent 回测事件流时默认跳过 observation `evidence` 和 decision `raw_output` 大字段，避免历史上下文膨胀后净值曲线长时间停留在空态。
 - [新功能] Agent 回测支持 `market=us` 美股现金账户三操盘手实验，默认生成美股短线/中线/长线隔离 profile，并执行 USD、整股、settled cash、卖出资金 T+1 美股工作日释放和滚动 5 个美股工作日最多 1 次日内回转的硬规则。
 - [改进] 美股 Agent 回测默认 profile 名称移除“美股”前缀，并将默认节奏调整为开盘、下午、收盘复盘和盘外/隔夜四段。
 - [新功能] 美股行情接入独立 fallback 顺序，新增 Longbridge / Massive(Polygon) / Twelve Data / Finnhub / Alpha Vantage / yfinance 优先级配置与 key 示例，不影响 A 股数据源。

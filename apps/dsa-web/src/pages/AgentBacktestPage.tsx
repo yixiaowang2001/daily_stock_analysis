@@ -75,6 +75,13 @@ type PositionItem = {
   [key: string]: unknown;
 };
 
+type DailyPnl = {
+  amount: number | null;
+  pct: number | null;
+  currentDate?: string | null;
+  previousDate?: string | null;
+};
+
 const PROFILE_ORDER = ['short', 'aggressive_short', 'medium', 'long'];
 const MARKET_META: Record<MarketFilter, { label: string; shortLabel: string; currency: string; description: string }> = {
   cn: {
@@ -183,6 +190,13 @@ function getCurrencySymbol(market?: string | null): string {
   return market === 'us' ? MARKET_META.us.currency : MARKET_META.cn.currency;
 }
 
+function formatSignedMoney(value: number | undefined | null, currencySymbol: string): string {
+  if (value == null || Number.isNaN(value)) return '--';
+  const numeric = Number(value);
+  const prefix = numeric > 0 ? '+' : numeric < 0 ? '-' : '';
+  return `${prefix}${currencySymbol}${formatMoney(Math.abs(numeric))}`;
+}
+
 function formatSignedPct(value: number | undefined | null): string {
   if (value == null || Number.isNaN(value)) return '--';
   const prefix = value > 0 ? '+' : '';
@@ -241,6 +255,43 @@ function latestNavByProfile(items: AgentBacktestDailyNavItem[]): Map<number, Age
     }
   }
   return map;
+}
+
+function dailyPnlByProfile(items: AgentBacktestDailyNavItem[]): Map<number, DailyPnl> {
+  const byProfile = new Map<number, AgentBacktestDailyNavItem[]>();
+  for (const item of items) {
+    const rows = byProfile.get(item.profileId) || [];
+    rows.push(item);
+    byProfile.set(item.profileId, rows);
+  }
+
+  const result = new Map<number, DailyPnl>();
+  for (const [profileId, rows] of byProfile.entries()) {
+    const sorted = [...rows].sort((left, right) => {
+      const dateCompare = String(right.tradeDate || '').localeCompare(String(left.tradeDate || ''));
+      if (dateCompare !== 0) return dateCompare;
+      return right.id - left.id;
+    });
+    const latest = sorted[0];
+    const previous = sorted.find((item) => item.tradeDate !== latest?.tradeDate);
+    if (!latest || !previous) {
+      result.set(profileId, {
+        amount: null,
+        pct: null,
+        currentDate: latest?.tradeDate,
+        previousDate: null,
+      });
+      continue;
+    }
+    const amount = latest.totalEquity - previous.totalEquity;
+    result.set(profileId, {
+      amount,
+      pct: previous.totalEquity ? (amount / previous.totalEquity) * 100 : null,
+      currentDate: latest.tradeDate,
+      previousDate: previous.tradeDate,
+    });
+  }
+  return result;
 }
 
 function positionCount(nav?: AgentBacktestDailyNavItem): number {
@@ -626,11 +677,47 @@ const HoldingsPanel: React.FC<HoldingsPanelProps> = ({ positions, symbolNames })
   </div>
 );
 
+const ProfileThumbnail: React.FC<{
+  profile: AgentBacktestProfileItem;
+  compact?: boolean;
+}> = ({ profile, compact = false }) => {
+  const meta = getProfileMeta(profile.profileKey);
+  const sizeClass = compact ? 'h-14 w-14' : 'h-16 w-16';
+  return (
+    <div
+      aria-hidden="true"
+      className={`relative shrink-0 overflow-hidden border bg-[var(--trade-panel-soft)] ${sizeClass}`}
+      style={{
+        borderColor: `${meta.color}99`,
+        background: `linear-gradient(135deg, ${meta.color}33 0%, var(--trade-panel-soft) 64%)`,
+      }}
+    >
+      <div className="absolute inset-x-2 bottom-2 flex h-7 items-end gap-1">
+        {[0.45, 0.78, 0.58, 0.9].map((height, index) => (
+          <span
+            key={height}
+            className="block flex-1"
+            style={{
+              height: `${height * 100}%`,
+              backgroundColor: meta.color,
+              opacity: 0.42 + index * 0.12,
+            }}
+          />
+        ))}
+      </div>
+      <span className="relative z-10 flex h-full items-start px-2 py-2 text-xs font-semibold leading-4 text-[color:var(--trade-fg)]">
+        {meta.shortLabel.slice(0, 2)}
+      </span>
+    </div>
+  );
+};
+
 type ProfileDetailDialogProps = {
   profile: AgentBacktestProfileItem;
   profileIndex: number;
   profileCount: number;
   nav?: AgentBacktestDailyNavItem;
+  dailyPnl?: DailyPnl;
   decision?: AgentBacktestDecisionItem;
   decisionHistory: AgentBacktestDecisionItem[];
   policyVersions: AgentBacktestPolicyItem[];
@@ -645,6 +732,7 @@ const ProfileDetailDialog: React.FC<ProfileDetailDialogProps> = ({
   profileIndex,
   profileCount,
   nav,
+  dailyPnl,
   decision,
   decisionHistory,
   policyVersions,
@@ -685,6 +773,7 @@ const ProfileDetailDialog: React.FC<ProfileDetailDialogProps> = ({
   const positions = getPositions(nav);
   const currentEquity = nav?.totalEquity ?? run?.initialCashPerAgent ?? null;
   const returnPct = nav ? getReturnPct(nav, run?.initialCashPerAgent || 0) : 0;
+  const currencySymbol = getCurrencySymbol(run?.market);
   const previousDecisions = decisionHistory.filter((item) => item.id !== decision?.id).slice(0, 8);
   const selectedPolicy = policyOptions.find((item) => item.id === selectedPolicyId) || policyOptions[0];
   const titleId = `profile-detail-title-${profile.id}`;
@@ -731,16 +820,19 @@ const ProfileDetailDialog: React.FC<ProfileDetailDialogProps> = ({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4 border-b border-[var(--trade-border)] px-5 py-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="h-2.5 w-2.5 shrink-0" style={{ backgroundColor: meta.color }} />
-              <h2 id={titleId} className="truncate text-lg font-semibold text-[color:var(--trade-fg)]">
-                {profile.displayName}
-              </h2>
+          <div className="flex min-w-0 items-start gap-3">
+            <ProfileThumbnail profile={profile} compact />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 shrink-0" style={{ backgroundColor: meta.color }} />
+                <h2 id={titleId} className="truncate text-lg font-semibold text-[color:var(--trade-fg)]">
+                  {profile.displayName}
+                </h2>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-[color:var(--trade-subtle)]">
+                {meta.shortLabel} · {profile.status} · 加入 {getProfileJoinedAt(profile)}
+              </p>
             </div>
-            <p className="mt-1 text-xs leading-5 text-[color:var(--trade-subtle)]">
-              {meta.shortLabel} · {profile.status} · 加入 {getProfileJoinedAt(profile)}
-            </p>
           </div>
           <button
             type="button"
@@ -752,7 +844,7 @@ const ProfileDetailDialog: React.FC<ProfileDetailDialogProps> = ({
           </button>
         </div>
         <div className="overflow-y-auto px-5 py-5" style={{ maxHeight: 'calc(100vh - 132px)' }}>
-          <dl className="grid grid-cols-2 gap-px bg-[var(--trade-border)] text-sm sm:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-px bg-[var(--trade-border)] text-sm sm:grid-cols-5">
             <div className="bg-[var(--trade-panel)] p-3">
               <dt className="text-xs text-[color:var(--trade-muted)]">当前收益</dt>
               <dd
@@ -760,6 +852,18 @@ const ProfileDetailDialog: React.FC<ProfileDetailDialogProps> = ({
                 style={{ color: (returnPct ?? 0) >= 0 ? 'var(--trade-positive)' : 'var(--trade-negative)' }}
               >
                 {formatSignedPct(returnPct)}
+              </dd>
+            </div>
+            <div className="bg-[var(--trade-panel)] p-3">
+              <dt className="text-xs text-[color:var(--trade-muted)]">当日盈亏</dt>
+              <dd
+                className="mt-1 text-lg font-semibold tabular-nums"
+                style={{ color: (dailyPnl?.pct ?? 0) >= 0 ? 'var(--trade-positive)' : 'var(--trade-negative)' }}
+              >
+                {formatSignedPct(dailyPnl?.pct)}
+              </dd>
+              <dd className="mt-0.5 text-xs tabular-nums text-[color:var(--trade-fg)]">
+                {formatSignedMoney(dailyPnl?.amount, currencySymbol)}
               </dd>
             </div>
             <div className="bg-[var(--trade-panel)] p-3">
@@ -936,7 +1040,11 @@ const AgentBacktestPage: React.FC = () => {
     try {
       const [runDetail, runEvents] = await Promise.all([
         agentBacktestApi.getRun(runId),
-        agentBacktestApi.listEvents(runId, { limit: 300 }),
+        agentBacktestApi.listEvents(runId, {
+          limit: 300,
+          includeEvidence: false,
+          includeRawOutput: false,
+        }),
       ]);
       setRun(runDetail);
       setEvents(runEvents);
@@ -974,6 +1082,7 @@ const AgentBacktestPage: React.FC = () => {
     [run?.symbolNames, run?.symbols],
   );
   const latestNavMap = useMemo(() => latestNavByProfile(events?.dailyNav || []), [events?.dailyNav]);
+  const dailyPnlMap = useMemo(() => dailyPnlByProfile(events?.dailyNav || []), [events?.dailyNav]);
   const latestDecisionMap = useMemo(() => latestDecisionByProfile(events?.decisions || []), [events?.decisions]);
   const selectedProfile = selectedProfileId == null ? null : profileById.get(selectedProfileId) ?? null;
   const selectedProfileIndex = useMemo(
@@ -981,6 +1090,7 @@ const AgentBacktestPage: React.FC = () => {
     [profiles, selectedProfileId],
   );
   const selectedProfileNav = selectedProfile ? latestNavMap.get(selectedProfile.id) : undefined;
+  const selectedProfileDailyPnl = selectedProfile ? dailyPnlMap.get(selectedProfile.id) : undefined;
   const selectedProfileDecision = selectedProfile ? latestDecisionMap.get(selectedProfile.id) : undefined;
   const selectedProfileDecisionHistory = useMemo(
     () => (selectedProfile ? sortDecisionsDesc((events?.decisions || []).filter((item) => item.profileId === selectedProfile.id)) : []),
@@ -1208,7 +1318,7 @@ const AgentBacktestPage: React.FC = () => {
                     暂无每日净值快照
                   </div>
                 ) : (
-                  <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                     <LineChart data={curvePoints} margin={{ top: 10, right: 24, bottom: 8, left: 0 }}>
                       <CartesianGrid stroke="var(--trade-grid)" vertical={false} />
                       <XAxis
@@ -1282,6 +1392,7 @@ const AgentBacktestPage: React.FC = () => {
             >
               {profiles.map((profile) => {
                 const nav = latestNavMap.get(profile.id);
+                const dailyPnl = dailyPnlMap.get(profile.id);
                 const decision = latestDecisionMap.get(profile.id);
                 const currentEquity = nav?.totalEquity ?? run?.initialCashPerAgent ?? null;
                 const returnPct = nav ? getReturnPct(nav, run?.initialCashPerAgent || 0) : 0;
@@ -1302,14 +1413,26 @@ const AgentBacktestPage: React.FC = () => {
                     }}
                     className="cursor-pointer border border-[var(--trade-border)] bg-[var(--trade-panel)] p-4 outline-none transition-colors hover:bg-[var(--trade-hover)] focus-visible:ring-1 focus-visible:ring-[var(--trade-muted)]"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
+                    <div className="flex items-start gap-3">
+                      <ProfileThumbnail profile={profile} />
+                      <div className="min-w-0 flex-1">
                         <h3 className="text-sm font-semibold" style={{ color: 'var(--trade-fg)' }}>{profile.displayName}</h3>
                         <p className="mt-1 text-xs leading-5 text-[var(--trade-subtle)]">
                           {meta.shortLabel} · {profile.status} · 加入 {getProfileJoinedAt(profile)}
                         </p>
+                        <p className="mt-3 text-xs text-[var(--trade-muted)]">当日盈亏</p>
+                        <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                          <span
+                            className="text-lg font-semibold tabular-nums"
+                            style={{ color: (dailyPnl?.pct ?? 0) >= 0 ? 'var(--trade-positive)' : 'var(--trade-negative)' }}
+                          >
+                            {formatSignedPct(dailyPnl?.pct)}
+                          </span>
+                          <span className="text-xs tabular-nums text-[var(--trade-fg)]">
+                            {formatSignedMoney(dailyPnl?.amount, currencySymbol)}
+                          </span>
+                        </div>
                       </div>
-                      <span className="h-2.5 w-2.5 shrink-0" style={{ backgroundColor: meta.color }} />
                     </div>
 
                     <div className="mt-5 grid grid-cols-2 gap-4">
@@ -1504,6 +1627,7 @@ const AgentBacktestPage: React.FC = () => {
           profileIndex={selectedProfileIndex}
           profileCount={profiles.length}
           nav={selectedProfileNav}
+          dailyPnl={selectedProfileDailyPnl}
           decision={selectedProfileDecision}
           decisionHistory={selectedProfileDecisionHistory}
           policyVersions={selectedProfilePolicies}

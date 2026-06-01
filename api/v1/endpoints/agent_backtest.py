@@ -410,10 +410,18 @@ def list_events(
     run_id: int,
     profile_key: Optional[str] = Query(None),
     limit: int = Query(200, ge=1, le=500),
+    include_evidence: bool = Query(True, description="Whether to include full observation evidence payloads"),
+    include_raw_output: bool = Query(True, description="Whether to include full decision raw_output payloads"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> AgentBacktestEventsResponse:
     try:
-        data = _service(db_manager).list_events(run_id=run_id, profile_key=profile_key, limit=limit)
+        data = _service(db_manager).list_events(
+            run_id=run_id,
+            profile_key=profile_key,
+            limit=limit,
+            include_evidence=include_evidence,
+            include_raw_output=include_raw_output,
+        )
         return AgentBacktestEventsResponse(**data)
     except AgentBacktestError as exc:
         raise _not_found_or_bad_request(exc)

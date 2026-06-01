@@ -7,6 +7,7 @@ from datetime import date
 from typing import Any, List, Optional, Tuple
 
 from sqlalchemy import and_, desc, func, select
+from sqlalchemy.orm import defer
 
 from src.storage import (
     AgentBacktestDailyNav,
@@ -240,6 +241,8 @@ class AgentBacktestRepository:
         run_id: int,
         profile_id: Optional[int] = None,
         limit: int = 200,
+        include_evidence: bool = True,
+        include_raw_output: bool = True,
     ) -> Tuple[
         List[AgentBacktestObservation],
         List[AgentBacktestDecision],
@@ -251,8 +254,11 @@ class AgentBacktestRepository:
             conditions = [AgentBacktestObservation.run_id == run_id]
             if profile_id is not None:
                 conditions.append(AgentBacktestObservation.profile_id == profile_id)
+            observation_query = select(AgentBacktestObservation)
+            if not include_evidence:
+                observation_query = observation_query.options(defer(AgentBacktestObservation.evidence_json))
             observations = session.execute(
-                select(AgentBacktestObservation)
+                observation_query
                 .where(and_(*conditions))
                 .order_by(desc(AgentBacktestObservation.trade_date), desc(AgentBacktestObservation.id))
                 .limit(limit)
@@ -261,8 +267,11 @@ class AgentBacktestRepository:
             conditions = [AgentBacktestDecision.run_id == run_id]
             if profile_id is not None:
                 conditions.append(AgentBacktestDecision.profile_id == profile_id)
+            decision_query = select(AgentBacktestDecision)
+            if not include_raw_output:
+                decision_query = decision_query.options(defer(AgentBacktestDecision.raw_output))
             decisions = session.execute(
-                select(AgentBacktestDecision)
+                decision_query
                 .where(and_(*conditions))
                 .order_by(desc(AgentBacktestDecision.decision_time), desc(AgentBacktestDecision.id))
                 .limit(limit)

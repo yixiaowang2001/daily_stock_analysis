@@ -20,6 +20,8 @@ type RunListQuery = {
 type EventsQuery = {
   profileKey?: string;
   limit?: number;
+  includeEvidence?: boolean;
+  includeRawOutput?: boolean;
 };
 
 function buildRunListParams(query: RunListQuery): Record<string, string | number> {
@@ -36,13 +38,19 @@ function buildRunListParams(query: RunListQuery): Record<string, string | number
   return params;
 }
 
-function buildEventsParams(query: EventsQuery): Record<string, string | number> {
-  const params: Record<string, string | number> = {};
+function buildEventsParams(query: EventsQuery): Record<string, string | number | boolean> {
+  const params: Record<string, string | number | boolean> = {};
   if (query.profileKey) {
     params.profile_key = query.profileKey;
   }
   if (query.limit != null) {
     params.limit = query.limit;
+  }
+  if (query.includeEvidence != null) {
+    params.include_evidence = query.includeEvidence;
+  }
+  if (query.includeRawOutput != null) {
+    params.include_raw_output = query.includeRawOutput;
   }
   return params;
 }

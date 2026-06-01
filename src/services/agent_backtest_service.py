@@ -858,6 +858,8 @@ class AgentBacktestService:
         run_id: int,
         profile_key: Optional[str] = None,
         limit: int = 200,
+        include_evidence: bool = True,
+        include_raw_output: bool = True,
     ) -> Dict[str, Any]:
         profile_id: Optional[int] = None
         if profile_key:
@@ -871,10 +873,18 @@ class AgentBacktestService:
             run_id=run_id,
             profile_id=profile_id,
             limit=max(1, min(int(limit), 500)),
+            include_evidence=include_evidence,
+            include_raw_output=include_raw_output,
         )
         return {
-            "observations": [self._observation_row_to_dict(row) for row in observations],
-            "decisions": [self._decision_row_to_dict(row) for row in decisions],
+            "observations": [
+                self._observation_row_to_dict(row, include_evidence=include_evidence)
+                for row in observations
+            ],
+            "decisions": [
+                self._decision_row_to_dict(row, include_raw_output=include_raw_output)
+                for row in decisions
+            ],
             "orders": [self._order_row_to_dict(row) for row in orders],
             "fills": [self._fill_row_to_dict(row) for row in fills],
             "daily_nav": [self._nav_row_to_dict(row) for row in navs],
@@ -1425,7 +1435,11 @@ class AgentBacktestService:
         }
 
     @staticmethod
-    def _observation_row_to_dict(row: AgentBacktestObservation) -> Dict[str, Any]:
+    def _observation_row_to_dict(
+        row: AgentBacktestObservation,
+        *,
+        include_evidence: bool = True,
+    ) -> Dict[str, Any]:
         return {
             "id": int(row.id),
             "run_id": int(row.run_id),
@@ -1435,13 +1449,17 @@ class AgentBacktestService:
             "data_cutoff_at": row.data_cutoff_at.isoformat() if row.data_cutoff_at else None,
             "sequence_no": int(row.sequence_no),
             "symbols": AgentBacktestService._json_loads(row.symbols_json, []),
-            "evidence": AgentBacktestService._json_loads(row.evidence_json, {}),
+            "evidence": AgentBacktestService._json_loads(row.evidence_json, {}) if include_evidence else {},
             "summary": row.summary,
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
 
     @staticmethod
-    def _decision_row_to_dict(row: AgentBacktestDecision) -> Dict[str, Any]:
+    def _decision_row_to_dict(
+        row: AgentBacktestDecision,
+        *,
+        include_raw_output: bool = True,
+    ) -> Dict[str, Any]:
         return {
             "id": int(row.id),
             "run_id": int(row.run_id),
@@ -1459,7 +1477,7 @@ class AgentBacktestService:
             "rationale": row.rationale,
             "risk_notes": row.risk_notes,
             "policy_version_label": row.policy_version_label,
-            "raw_output": AgentBacktestService._json_loads(row.raw_output, {}),
+            "raw_output": AgentBacktestService._json_loads(row.raw_output, {}) if include_raw_output else {},
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
 

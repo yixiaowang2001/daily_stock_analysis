@@ -154,6 +154,44 @@ class AgentBacktestServiceTestCase(unittest.TestCase):
             symbol="000001",
             )
 
+    def test_list_events_can_omit_heavy_payloads(self) -> None:
+        run = self.service.create_run(
+            name="轻量事件实验",
+            symbols=["600519"],
+            start_date=date(2026, 1, 2),
+        )
+        observation = self.service.record_observation(
+            run_id=run["id"],
+            profile_key="short",
+            trade_date=date(2026, 1, 2),
+            observation_time="09:40",
+            data_cutoff_at=datetime(2026, 1, 2, 9, 40),
+            evidence={"large": {"nested": ["payload"]}},
+            summary="已生成上下文",
+        )
+        self.service.record_decision(
+            run_id=run["id"],
+            profile_key="short",
+            observation_id=observation["id"],
+            trade_date=date(2026, 1, 2),
+            decision_time=datetime(2026, 1, 2, 9, 41),
+            action="observe",
+            raw_output={"large": {"model": "payload"}},
+        )
+
+        full_events = self.service.list_events(run_id=run["id"])
+        self.assertEqual(full_events["observations"][0]["evidence"]["large"]["nested"], ["payload"])
+        self.assertEqual(full_events["decisions"][0]["raw_output"]["large"]["model"], "payload")
+
+        slim_events = self.service.list_events(
+            run_id=run["id"],
+            include_evidence=False,
+            include_raw_output=False,
+        )
+        self.assertEqual(slim_events["observations"][0]["evidence"], {})
+        self.assertEqual(slim_events["decisions"][0]["raw_output"], {})
+        self.assertEqual(slim_events["observations"][0]["summary"], "已生成上下文")
+
     def test_removed_watchlist_holding_can_exit_but_not_rebuy(self) -> None:
         run = self.service.create_run(
             name="移出关注池持仓实验",
